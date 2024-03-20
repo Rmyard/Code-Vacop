@@ -1,4 +1,4 @@
-#Brake_withCAN_master
+#Brake_withCAN_master_openloop
 #Takes a user input and send it on the can bus can0
 #dont forget to bring can up with "sudo ip link set can0 up type can bitrate 1000000"
 #madeby:Rémi Myard
