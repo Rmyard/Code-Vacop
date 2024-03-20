@@ -1,4 +1,4 @@
-#Brake_withCAN_slave
+#Brake_withCAN_slave_openloop
 #Pilot the motor controler with a pwm signal
 #Message received from can0
 #madeby:Rémi Myard
