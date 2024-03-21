@@ -1,93 +1,96 @@
-#Brake_withCAN_slave_closedloop.py
-#12/03/24
-#Rémi Myard
-#This is a very basic code to control the brake actuator.
-#arbitration_id
-
-#000 OBU
-#001 Brakes
-#002 Steering
-#003 Motors
-
 import RPi.GPIO as GPIO
 import can
 import os
-
-# Initialize CAN bus interface
-os.system("sudo ip link set can0 up type can bitrate 1000000")
-
-bus = can.interface.Bus(channel='can0', bustype='socketcan')
+import time
+import Adafruit_GPIO.SPI as SPI
+import Adafruit_MCP3008
 
 # Set GPIO mode to BCM
 GPIO.setmode(GPIO.BCM)
 
-# Set GPIO pins for PWM and direction
-EXTEND_PIN = 17
-RETRACT_PIN = 27
-CURRENT_PIN = 22
-POSITION_PIN = 23
-
-GPIO.setup(EXTEND_PIN, GPIO.OUT)
-GPIO.setup(RETRACT_PIN, GPIO.OUT)
-GPIO.setup(CURRENT_PIN, GPIO.IN)
-GPIO.setup(POSITION_PIN, GPIO.IN)
+# Set GPIO pins for PWM
+EXTEND_PWM_PIN = 17
+RETRACT_PWM_PIN = 27
+GPIO.setup(EXTEND_PWM_PIN, GPIO.OUT)
+GPIO.setup(RETRACT_PWM_PIN, GPIO.OUT)
 
 # Set PWM frequency (Hz)
 PWM_FREQ = 100
 
 # Create PWM instances
-extend_pwm = GPIO.PWM(EXTEND_PIN, PWM_FREQ)
-retract_pwm = GPIO.PWM(RETRACT_PIN, PWM_FREQ)
+forward_pwm = GPIO.PWM(EXTEND_PWM_PIN, PWM_FREQ)
+backward_pwm = GPIO.PWM(RETRACT_PWM_PIN, PWM_FREQ)
 
-# Function to send a CAN message
-def send_can_message(data):
-    message = can.Message(arbitration_id=0x001, data=data) #id of 001 refer to the brake
-    bus.send(message)
-    print("CAN Message sent:", message)
+# MCP3008 configuration
+CLK = 18
+MISO = 23
+MOSI = 24
+CS = 25
+mcp = Adafruit_MCP3008.MCP3008(clk=CLK, cs=CS, miso=MISO, mosi=MOSI)
 
-# Function to receive a CAN message
-def receive_can_message(data):
-    # Receive CAN message
-    message = bus.recv()
-    force_setpoint = message.data[0] #force setpoint
-    return (force_setpoint)
+# Proportional gain (Kp)
+Kp = 1.0
 
+# Function to read position from MCP3008
+def read_position():
+    return mcp.read_adc(0)
 
-# Function to control PWM based on user input
-def control_pwm(force_setpoint):
+# Function to control PWM based on CAN input and position feedback
+def control_position(can_input, desired_position):
     try:
-        # Convert input to integer
-        value = int(force_setpoint)
+        # Convert CAN input to integer
+        value = int(can_input)
 
-        # Check if input is within range
-        if -100 <= value <= 100:
-            # Map value to duty cycle (0-100)
-            duty_cycle = ((value + 100) / 200.0) * 100
+        # Calculate error (desired position - actual position)
+        error = desired_position - read_position()
 
-            # Set PWM duty cycle for forward and backward directions
-            if value >= 0:  # Forward
-                extend_pwm.ChangeDutyCycle(duty_cycle)
-                retract_pwm.ChangeDutyCycle(0)
-            else:  # Backward
-                extend_pwm.ChangeDutyCycle(0)
-                retract_pwm.ChangeDutyCycle(duty_cycle)
+        # Calculate control value
+        control_value = Kp * error
+
+        # Map control value to duty cycle (0-100)
+        if control_value >= 0:
+            duty_cycle_forward = min(control_value, 100)
+            duty_cycle_backward = 0
         else:
-            print("Invalid input. Value must be between -100 and 100.")
+            duty_cycle_forward = 0
+            duty_cycle_backward = min(-control_value, 100)
+
+        # Set PWM duty cycle for forward and backward directions
+        forward_pwm.ChangeDutyCycle(duty_cycle_forward)
+        backward_pwm.ChangeDutyCycle(duty_cycle_backward)
+
     except ValueError:
         print("Invalid input. Please enter a valid integer.")
 
+# Initialize CAN bus interface
+os.system('sudo ip link set can0 up type can bitrate 1000000')
+time.sleep(0.1)  # Wait for the interface to be initialized
+bus = can.interface.Bus(channel='can0', bustype='socketcan')
+
 try:
     # Start PWM
-    extend_pwm.start(0)
-    retract_pwm.start(0)
+    forward_pwm.start(0)
+    backward_pwm.start(0)
 
-    # Continuous input
+    print("Listening for CAN messages...")
+
+    # Continuous listening for CAN messages
     while True:
-        user_input = input("Enter a value from -100 to 100: ")
-        control_pwm(user_input)
+        # Receive CAN message
+        message = bus.recv()
+
+        # Extract desired position from CAN message (assuming it's the first byte)
+        desired_position = message.data[0]
+
+        # Control position based on CAN input and position feedback
+        control_position(desired_position, read_position())
 
 except KeyboardInterrupt:
     # Clean up GPIO
-    extend_pwm.stop()
-    retract_pwm.stop()
+    forward_pwm.stop()
+    backward_pwm.stop()
     GPIO.cleanup()
+
+finally:
+    # Close the CAN bus
+    bus.shutdown()
