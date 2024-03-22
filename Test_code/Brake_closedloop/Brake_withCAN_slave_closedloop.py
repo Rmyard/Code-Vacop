@@ -22,10 +22,10 @@ forward_pwm = GPIO.PWM(EXTEND_PWM_PIN, PWM_FREQ)
 backward_pwm = GPIO.PWM(RETRACT_PWM_PIN, PWM_FREQ)
 
 # MCP3008 configuration
-CLK = 18
-MISO = 23
-MOSI = 24
-CS = 25
+CLK = 11
+MISO = 9
+MOSI = 10
+CS = 8
 mcp = Adafruit_MCP3008.MCP3008(clk=CLK, cs=CS, miso=MISO, mosi=MOSI)
 
 # Proportional gain (Kp)
