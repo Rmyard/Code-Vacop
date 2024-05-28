@@ -1,5 +1,5 @@
 #OBU.py
-#27/05/24
+#28/05/24
 #Rémi Myard
 
 
@@ -95,10 +95,10 @@ def load_can_list(filename):
 device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map = load_can_list('CAN_List.txt')
 
 # Function to send message on the CAN bus
-def can_send(bus, device_ID, order_ID, data=None):
+def can_send(bus, device_ID, order_id, data=None):
     # Convert human-readable IDs to their corresponding hex values
     device_value = device_id_map.get(device_ID)
-    order_value = order_id_map.get(order_ID)
+    order_value = order_id_map.get(order_id)
 
     if device_value is None or order_value is None:
         raise ValueError("Invalid device_id or order_id")
@@ -123,7 +123,7 @@ def can_send(bus, device_ID, order_ID, data=None):
 
     # Send the message on the CAN bus
     bus.send(can_message)
-    print("sent:", device_ID, order_ID, data)
+    print("sent:", device_ID, order_id, data)
 
 # Function to receive messages from the CAN bus
 class can_receive(can.Listener):
@@ -140,7 +140,7 @@ class can_receive(can.Listener):
         if self.last_received_message is None:
             return None  # Return None if no message has been received
 
-        # Extract device_ID and order_ID from the arbitration ID
+        # Extract device_ID and order_id from the arbitration ID
         device_value = hex(self.last_received_message.arbitration_id >> 8)[2:].zfill(2)
         order_value = hex(self.last_received_message.arbitration_id & 0xFF)[2:].zfill(2)
 
@@ -149,18 +149,20 @@ class can_receive(can.Listener):
 
         # Convert hex values to human-readable strings
         device_ID = device_id_reverse_map.get(device_value, device_value)
-        order_ID = order_id_reverse_map.get(order_value, order_value)
+        order_id = order_id_reverse_map.get(order_value, order_value)
 
-        if device_ID == device:
+        if device_ID == device: #only process messages destined to this device
             
-            print("received:", device_ID, order_ID, data)
-            # Return device_ID, order_ID, and data in a tuple
-            return device_ID, order_ID, data
+            print("received:", device_ID, order_id, data)
+            # Return device_ID, order_id, and data in a tuple
+            return device_ID, order_id, data
 
-def propulsion (prop_value):
+def propulsion(prop_value):
     # Map the value
     prop_value = int((prop_value * 100) / 1023)
     SetTorque.ChangeDutyCycle(prop_value)
+
+
 
 #################################### MAIN #########################################################
 
@@ -171,16 +173,26 @@ def main():
         with can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False) as bus:
             # Start CAN bus
             message_listener = can_receive()
-            notifier = can.Notifier(bus, [message_listener])
-
+            can.Notifier(bus, [message_listener])
+            
             while True:
                 # Receive CAN message
                 can_msg = message_listener.can_input()
+                
                 if can_msg is not None:
-                    prop_value=can_msg[2]
-                    print("accel= ",prop_value)
-                    propulsion(prop_value)
-                time.sleep(0.5)
+                    order_id = can_msg[1]
+                    data = can_msg[2]
+
+                    if order_id == "accel_pedal":
+                        propulsion(data)
+                        print("accel = ",data)
+
+                    if order_id == "brake_override":
+
+                        while True:
+                            propulsion(0)
+
+                time.sleep(0.1)
                 
                 
 
