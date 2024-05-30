@@ -259,7 +259,7 @@ def brake(brake_pos_set):
             control_value = -100
         if control_value > 100:
             control_value = 100
-        if -threshold<control_value<threshold:#deadzone (couper acctionnement autour du bruit)
+        if -threshold<control_value<threshold:#deadzone (couper actionnement autour du bruit)
             control_value = 0
 
         # Map control value to duty cycle
@@ -276,7 +276,7 @@ def brake(brake_pos_set):
     except ValueError:
         print("Invalid input. Please enter a valid integer.")
 
-
+#Function to process incoming can messages
 def processor(can_msg):
     global button_state
     if can_msg is not None:
@@ -284,13 +284,13 @@ def processor(can_msg):
         order_id = can_msg[1]
         data = can_msg[2]
         
-        if order_id == "brake_set" and data == 1:
+        if order_id == "brake_set" and data == 0:
             brake(no_brake)
 
-        elif order_id == "brake_set" and data == 2:
+        elif order_id == "brake_set" and data == 1:
             brake(full_brake)
 
-        elif order_id == "brake_set" and data != 1 or data != 2:
+        elif order_id == "brake_set" and data != 0 or data != 1:
             brake(no_brake)
             print("error")
 
