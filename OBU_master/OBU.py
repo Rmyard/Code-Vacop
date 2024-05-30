@@ -95,7 +95,7 @@ def LoadCanList(filename):
 device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map = LoadCanList('CAN_List.txt')
 
 # Function to send message on the CAN bus
-def can_send(device_id, order_id, data=None):
+def can_send(device_id, order_id, data=None, ui=None):
     # Convert human-readable IDs to their corresponding hex values
     device_value = device_id_map.get(device_id)
     order_value = order_id_map.get(order_id)
@@ -123,13 +123,18 @@ def can_send(device_id, order_id, data=None):
 
     # Send the message on the CAN bus
     bus.send(can_message)
-    print("sent:", device_id, order_id, data)
+    message = f"sent: {device_id} {order_id} {data}"
+    
+    # Log to the terminal
+    if ui:
+        ui.log_to_terminal(message)
 
 # Class to receive messages from the CAN bus
 class can_receive(can.Listener):
-    def __init__(self):
+    def __init__(self, ui=None):
         super(can_receive, self).__init__()
         self.last_received_message = None
+        self.ui = ui  # Add a reference to the UserInterface instance
 
     def on_message_received(self, msg):
         self.last_received_message = msg
@@ -151,9 +156,11 @@ class can_receive(can.Listener):
         device_id = device_id_reverse_map.get(device_value, device_value)
         order_id = order_id_reverse_map.get(order_value, order_value)
 
-        if device_id == device: #only process messages destined to this device
-            
-            print("received:", device_id, order_id, data)
+        if device_id == device:  # only process messages destined to this device
+            message = f"received: {device_id} {order_id} {data}"
+            # Log to the terminal
+            if self.ui:
+                self.ui.log_to_terminal(message)
             # Return device_ID, order_id, and data in a tuple
             return device_id, order_id, data
 
@@ -165,32 +172,43 @@ def propulsion(prop_value):
     SetTorque.ChangeDutyCycle(prop_value)
 
 # Function to process can messages and user inputs
-def processor(can_msg, user_msg):
+def processor(can_msg, user_msg, ui=None):
     global propulsion_override
-    #extract data from the user message 
+    # Extract data from the user message 
     driving_mode = user_msg[0]
     braking_mode = user_msg[1]
     steering_value = user_msg[2]
     prop_value = user_msg[3]
 
-    if driving_mode == 1 and braking_mode == 1:
-        can_send("BRAKE","brake_set",1)
-        
-    if braking_mode == 0:
-        can_send("BRAKE","brake_set",0)
+    #mode auto, freinage
+    if ui.last_braking_mode is None or ui.last_braking_mode != braking_mode:
+        if braking_mode == 1 and driving_mode == 1:
+            can_send("BRAKE", "brake_set", 1, ui)
+        elif braking_mode == 0:
+            can_send("BRAKE", "brake_set", 0, ui)
+        ui.last_braking_mode = braking_mode
 
+    #mode auto, propulsion
     if driving_mode == 1 and propulsion_override == 0:
-            propulsion(prop_value)
-            
+        propulsion(prop_value)
+
+    #si on freine alors on stop la propulsion       
     if propulsion_override == 1:
-            propulsion(0)
+        propulsion(0)
+
+    #mode auto, tourner
+    if ui.last_steering_value is None or ui.last_steering_value != steering_value:
+        if driving_mode == 1:
+            #map value: 
+            mapped_steering_value = int(((steering_value+100)*1023)/200)
+            can_send("STEER", "steer_pos_set", mapped_steering_value, ui)
+        ui.last_steering_value = steering_value
 
 
     if can_msg is not None:
-        #extract data from the can message
+        # Extract data from the can message
         order_id = can_msg[1]
         data = can_msg[2]
-        
         
         if order_id == "brake_override" and data == 1:
             propulsion_override = 1
@@ -198,7 +216,7 @@ def processor(can_msg, user_msg):
         if order_id == "brake_override" and data == 0:
             propulsion_override = 0
 
-        #manual mode
+        #manuel, acceleration
         if driving_mode == 0 and order_id == "accel_pedal" and propulsion_override == 0:
             propulsion(data)
 
@@ -213,6 +231,8 @@ class UserInterface:
         self.braking_mode = 0
         self.steering_value = 0
         self.prop_value = 0
+        self.last_braking_mode = None  # Track the last braking mode state
+        self.last_steering_value = None # Track the last steering value
 
         # Create a frame to hold the controls
         frame_controls = tk.Frame(root)
@@ -279,20 +299,16 @@ class UserInterface:
     def toggle_driving_mode(self):
         self.driving_mode = 1 if self.driving_mode == 0 else 0
         self.drive_button.config(text="auto" if self.driving_mode == 1 else "manual")
-        self.log_to_terminal(f"Driving Mode: {'auto' if self.driving_mode == 1 else 'manual'}")
 
     def toggle_braking_mode(self):
         self.braking_mode = 1 if self.braking_mode == 0 else 0
         self.brake_button.config(text="braking" if self.braking_mode == 1 else "not braking")
-        self.log_to_terminal(f"Braking Mode: {'braking' if self.braking_mode == 1 else 'not braking'}")
 
     def update_steering_value(self, event):
         self.steering_value = int(self.steering_scale.get())
-        self.log_to_terminal(f"Steering Value: {self.steering_value}")
 
     def update_propulsion_value(self, event):
         self.prop_value = int(self.propulsion_scale.get())
-        self.log_to_terminal(f"Propulsion Value: {self.prop_value}")
 
     def log_to_terminal(self, message):
         self.terminal.insert(tk.END, message + '\n')
@@ -301,24 +317,20 @@ class UserInterface:
     def get_values(self):
         return self.driving_mode, self.braking_mode, self.steering_value, self.prop_value
 
-
-
 #################################### MAIN ###################################################
-
-
 
 def main():
     global propulsion_override
     try:
         with can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False) as bus:
-            # Start CAN bus
-            message_listener = can_receive()
-            can.Notifier(bus, [message_listener])
             # Initialise variables
             propulsion_override = 0
             root = tk.Tk()
-            root.title("Braking Mode and Steering Control")
+            root.title("VACOP Control v1")
             app = UserInterface(root)
+            # Start CAN bus
+            message_listener = can_receive(ui=app)
+            can.Notifier(bus, [message_listener])
             
             while True:
                 # Receive CAN message
@@ -327,11 +339,8 @@ def main():
                 root.update()
                 user_msg = app.get_values()
                 # Process CAN messages and user messages
-                processor(can_msg, user_msg)
+                processor(can_msg, user_msg, ui=app)  # Pass the ui object here
                 time.sleep(0.1)
-
-                
-                
 
     except KeyboardInterrupt:
         print("Exiting...")
