@@ -7,9 +7,9 @@ STEER = 02
 
 OrderID:
 {
-AU = ff 
-start = 01
-stop = 02
+AU = 01 
+start = 02
+stop = 03
 
 prop_rdy = 10
 brake_rdy = 11
@@ -22,16 +22,17 @@ steer_not_rdy = 22
 brake_override = 31
 steer_override = 32
 
-prop_torque_set = 40
-prop_torque_real = 41
-prop_speed_set = 42
-prop_speed_real = 43
-
-brake_pos_set = 40
-brake_pos_real = 41
+brake_set = 40
+brake_pos_set = 41
+brake_pos_real = 42
 
 steer_pos_set = 50
 steer_pos_real = 51
 
 accel_pedal = 60
+
+prop_torque_set = 70
+prop_torque_real = 71
+prop_speed_set = 72
+prop_speed_real = 73
 }
