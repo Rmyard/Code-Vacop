@@ -2,7 +2,8 @@
 #31/05/24
 #Rémi Myard
 
-#This code is implementing the accelerator pedal and manual braking detection
+#This code is hosted by the BRAKE device, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
+#It can also control the steering for now but at the end of the project the steering will be controlled by a different node. 
 
 
 
@@ -255,10 +256,10 @@ def brake(brake_pos_set):
         else:
             GPIO.output(EXTEND_EN_PIN, GPIO.HIGH)
         
-        # Calculate error
+        # Calculate error (setpoint-real value)
         error = brake_pos_set - brake_pos_real
 
-        # Calculate control value
+        # Calculate control value (apply a proportional gain)
         control_value = Kp * error
         print("ctr_val = ",control_value)
         
@@ -268,10 +269,10 @@ def brake(brake_pos_set):
             control_value = -100
         if control_value > 100:
             control_value = 100
-        if -threshold<control_value<threshold:#deadzone (couper actionnement autour du bruit)
+        if -threshold<control_value<threshold:#deadzone (avoid activating the actuator with the noise)
             control_value = 0
 
-        # Map control value to duty cycle
+        # Map control value to duty cycle (this essentially controls the motor speed and direction)
         if control_value > 0: # Extension
             extend_pwm.ChangeDutyCycle(control_value)
             retract_pwm.ChangeDutyCycle(0)
@@ -322,7 +323,7 @@ def steer(steer_pos_set):
     steer_pos_real = read_steer_position()
     error = steer_pos_set - steer_pos_real
 
-#Function to process incoming can messages
+#Function to process incoming can messages and take decisions
 def processor(can_msg):
     global button_state
     if can_msg is not None:
