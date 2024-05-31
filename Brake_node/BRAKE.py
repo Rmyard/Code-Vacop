@@ -1,5 +1,5 @@
 #BRAKE.py
-#30/05/24
+#31/05/24
 #Rémi Myard
 
 #This code is implementing the accelerator pedal and manual braking detection
@@ -35,10 +35,13 @@ EXTEND_PWM_PIN = 17
 RETRACT_PWM_PIN = 27
 EXTEND_EN_PIN = 22
 RETRACT_EN_PIN = 23
-GPIO.setup(EXTEND_PWM_PIN, GPIO.OUT)
-GPIO.setup(RETRACT_PWM_PIN, GPIO.OUT)
-GPIO.setup(EXTEND_EN_PIN, GPIO.OUT)
-GPIO.setup(RETRACT_EN_PIN, GPIO.OUT)
+GPIO.setup([EXTEND_PWM_PIN, RETRACT_PWM_PIN, EXTEND_EN_PIN, RETRACT_EN_PIN], GPIO.OUT)
+
+# Set GPIO pins for stepper control
+DIR_PIN= 16 # Direction (DIR) GPIO Pin
+PUL_PIN = 26 # Step GPIO Pin
+EN_PIN = 6 # Enable GPIO Pin
+GPIO.setup([DIR_PIN, PUL_PIN, EN_PIN], GPIO.OUT)
 
 # Create PWM instances
 extend_pwm = GPIO.PWM(EXTEND_PWM_PIN, PWM_FREQ)
@@ -168,16 +171,22 @@ class can_receive(can.Listener):
         device_ID = device_id_reverse_map.get(device_value, device_value)
         order_ID = order_id_reverse_map.get(order_value, order_value)
 
-        if device_ID == device:
+        if device_ID == device or device_ID == "STEER": #pour l'instant STEER = BRAKE, NE PAS OUBLIER DENLEVER LE OR
             
             print("received:", device_ID, order_ID, data)
             # Return device_ID, order_ID, and data in a tuple
             return device_ID, order_ID, data
 
-# Function to read position from MCP3008
-def read_position():
+# Function to read brake position from MCP3008
+def read_brake_position():
     brake_pos_real = int(mcp.read_adc(1))
     return brake_pos_real
+
+# Function to read steer position from MCP3008
+def read_steer_position():
+    steer_pos_real = int(mcp.read_adc(2)) #third pin of the mcp on the test bench
+    print("steer_pos_real = ",steer_pos_real)
+    return steer_pos_real
 
 # Function to read acceleration from MCP3008
 last_accel_pedal = None
@@ -216,11 +225,11 @@ def brake_override(BRAKE_PIN):
         button_state = 1 if button_state == 0 else 0
         can_send(bus,"OBU","brake_override",button_state)
 
-# Function to control PWM based on CAN input and position feedback
+# Function to control the braking motor
 def brake(brake_pos_set):
     try:
         #Read actuator position
-        brake_pos_real= read_position()
+        brake_pos_real= read_brake_position()
         print("brake_pos_real = ",brake_pos_real)
         print("brake_pos_set = ",brake_pos_set)
 
@@ -276,6 +285,43 @@ def brake(brake_pos_set):
     except ValueError:
         print("Invalid input. Please enter a valid integer.")
 
+# Function to control the steering motor
+def steer(steer_pos_set):
+    steer_pos_real = read_steer_position()
+    error = steer_pos_set - steer_pos_real
+        
+    #safety mechanism
+    if steer_pos_real < 10:
+        GPIO.output(EN_PIN, GPIO.HIGH) #Desactivate the motor in case of reaching min value
+        print("steer min value reached, motor blocked")
+    elif steer_pos_real > 1013: #Desactivate the motor in case of reaching max value
+        GPIO.output(EN_PIN, GPIO.HIGH)
+        print("steer max value reached, motor blocked")
+    else:
+        GPIO.output(EN_PIN, GPIO.LOW)
+
+    #Define direction of spin
+    if error > 10:
+        GPIO.output(DIR_PIN, GPIO.HIGH)
+        #send pulse
+        GPIO.output(PUL_PIN, GPIO.HIGH)
+        time.sleep(0.0005)
+        GPIO.output(PUL_PIN, GPIO.LOW)
+
+    elif error < -10:
+        GPIO.output(DIR_PIN, GPIO.LOW)
+        #send pulse
+        GPIO.output(PUL_PIN, GPIO.HIGH) #faire les pulse avec du PWM
+        time.sleep(0.0005)
+        GPIO.output(PUL_PIN, GPIO.LOW)
+
+    else:
+        GPIO.output(EN_PIN, GPIO.HIGH)
+    
+    #Check real value
+    steer_pos_real = read_steer_position()
+    error = steer_pos_set - steer_pos_real
+
 #Function to process incoming can messages
 def processor(can_msg):
     global button_state
@@ -284,32 +330,32 @@ def processor(can_msg):
         order_id = can_msg[1]
         data = can_msg[2]
         
-        if order_id == "brake_set" and data == 0:
+        #braking
+        if order_id == "brake_set" and data == 0:#can message with no brake
             brake(no_brake)
-
-        elif order_id == "brake_set" and data == 1:
+        elif order_id == "brake_set" and data == 1:#can message with full brake
             brake(full_brake)
-
-        elif order_id == "brake_set" and data != 0 or data != 1:
+        elif order_id == "brake_set" and data != 0 or data != 1: #error in can message
             brake(no_brake)
             print("error")
-
-        elif button_state == 1:
+        elif button_state == 1: #user is braking, we retract the actuator
             brake(no_brake)
             print("brake override detected")
 
+        #steering
+        if order_id == "steer_pos_set":
+            steer(data)
 
 # Function to initialise the actuator
 def init():
     print("position initialization...\n")
-    brake_pos_real = read_position()
+    brake_pos_real = read_brake_position()
     while brake_pos_real != no_brake:
-        brake_pos_real = read_position()
+        brake_pos_real = read_brake_position()
         brake(no_brake)
         print("position = ",brake_pos_real)
         time.sleep(0.1)
     print("position initialized")
-
 
 
 
