@@ -2,6 +2,8 @@
 #31/05/24
 #Rémi Myard
 
+#This is the code of the On Board Unit of the VACOP
+#It takes inputs from the user and the can_bus, takes decisions and commands all actuators (propulsion, braking, steering)
 
 
 ##################################### Setup ###################################
@@ -15,17 +17,17 @@ import time
 import os
 import tkinter as tk
 
-#Set the device as brake. It will setup the device id in the canbus
+#Set the device as On Board Unit (OBU). It will be used to sort incoming can messages destined to this device
 device = "OBU"
 
 # Set GPIO mode to BCM
 GPIO.setmode(GPIO.BCM)
 
-# Set GPIO pins
-DIR_POSITIVE = 27
-DIR_NEGATIVE = 23
-SetTorquePin = 17
-CurrentLimitPin = 22
+# Set GPIO pins for the propulsion controller
+DIR_POSITIVE = 27 #make the car go forward
+DIR_NEGATIVE = 23 #make the car go backward
+SetTorquePin = 17 #set the current applied to the motors
+CurrentLimitPin = 22 #set the current limit of the motors
 
 # Set PWM frequency (Hz)
 PWM_FREQ = 5000
@@ -37,7 +39,7 @@ GPIO.setup(SetTorquePin, GPIO.OUT)
 GPIO.setup(CurrentLimitPin, GPIO.OUT)
 
 # Set the initial direction
-GPIO.output(DIR_POSITIVE, GPIO.HIGH)
+GPIO.output(DIR_POSITIVE, GPIO.HIGH) #for now we can only go forward
 GPIO.output(DIR_NEGATIVE, GPIO.LOW)
 
 # Initialize PWM for SetTorquePin
@@ -48,6 +50,7 @@ CurrentLimit = GPIO.PWM(CurrentLimitPin, PWM_FREQ)
 SetTorque.start(0)
 CurrentLimit.start(0)
 
+#Setup the can bus
 bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False)
 
 
@@ -55,7 +58,8 @@ bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_message
 
 
 
-# Function to load the CAN_List.txt
+# Function to load the CAN_List.txt 
+# CAN_List.txt is a file containing device adresses and a list of orders. This file is basically an encryption device to read and write can messages. It can be easily modified and copy/pasted across all devices.
 def LoadCanList(filename):
     device_id_map = {}
     device_id_reverse_map = {}
@@ -165,6 +169,7 @@ class can_receive(can.Listener):
             return device_id, order_id, data
 
 # Function to control the motors
+# The motors are at the back of the car, with the OBU. The OBU controlls the motors with GPIO, no need for the can bus.
 def propulsion(prop_value):
     # Map the value
     prop_value = int((prop_value * 100) / 1023)
@@ -180,23 +185,23 @@ def processor(can_msg, user_msg, ui=None):
     steering_value = user_msg[2]
     prop_value = user_msg[3]
 
-    #mode auto, freinage
+    #Automatic mode, braking
     if ui.last_braking_mode is None or ui.last_braking_mode != braking_mode:
-        if braking_mode == 1 and driving_mode == 1:
+        if braking_mode == 1 and driving_mode == 1: #braking mode=1 means we want to brake, driving mode=1 mean we are in automatic control
             can_send("BRAKE", "brake_set", 1, ui)
-        elif braking_mode == 0:
+        elif braking_mode == 0: #braking mode=0 means we are not braking
             can_send("BRAKE", "brake_set", 0, ui)
         ui.last_braking_mode = braking_mode
 
-    #mode auto, propulsion
+    #Automatic mode, propulsion override
     if driving_mode == 1 and propulsion_override == 0:
         propulsion(prop_value)
 
-    #si on freine alors on stop la propulsion       
+    #If we detect that the user is braking, we stop the propulsion   
     if propulsion_override == 1:
         propulsion(0)
 
-    #mode auto, tourner
+    #Automatic mode, steering
     if ui.last_steering_value is None or ui.last_steering_value != steering_value:
         if driving_mode == 1:
             #map value: 
@@ -207,21 +212,22 @@ def processor(can_msg, user_msg, ui=None):
 
     if can_msg is not None:
         # Extract data from the can message
-        order_id = can_msg[1]
-        data = can_msg[2]
+        order_id = can_msg[1] #order_id is the order we received
+        data = can_msg[2] #data is the data attached to the order
         
         if order_id == "brake_override" and data == 1:
-            propulsion_override = 1
+            propulsion_override = 1 #modify the global variable propulsion_override if we detect that the user is braking
 
         if order_id == "brake_override" and data == 0:
             propulsion_override = 0
 
-        #manuel, acceleration
+        #Manual acceleration, if we are in manual mode, we take order from the accelerator pedal
         if driving_mode == 0 and order_id == "accel_pedal" and propulsion_override == 0:
             propulsion(data)
 
 
-# Class to interact with the variables
+# Class to interact with the variables, it opens a control pannel where the car can be piloted. 
+# From there we can switch to automatic/manual mode, we can steer, brake and accelerate. We can also see the feed of the can bus
 class UserInterface:
     def __init__(self, root):
         self.root = root
@@ -310,7 +316,7 @@ class UserInterface:
     def update_propulsion_value(self, event):
         self.prop_value = int(self.propulsion_scale.get())
 
-    def log_to_terminal(self, message):
+    def log_to_terminal(self, message):#this is a terminal that log the feed of the can bus
         self.terminal.insert(tk.END, message + '\n')
         self.terminal.see(tk.END)  # Auto-scroll to the end
 
@@ -333,13 +339,14 @@ def main():
             can.Notifier(bus, [message_listener])
             
             while True:
-                # Receive CAN message
+                # Receive CAN message (from the devices: BRAKE or STEER)
                 can_msg = message_listener.can_input()
-                # Receive inputs from user
+                # Receive inputs from user 
                 root.update()
                 user_msg = app.get_values()
-                # Process CAN messages and user messages
+                # Process CAN messages and user messages, takes decisions and send orders to the devices
                 processor(can_msg, user_msg, ui=app)  # Pass the ui object here
+                #Time sleep is mendatory for now because if the loop runs too fast the can bus crashes.
                 time.sleep(0.1)
 
     except KeyboardInterrupt:
