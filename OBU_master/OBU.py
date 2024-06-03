@@ -1,5 +1,5 @@
 #OBU.py
-#31/05/24
+#03/06/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
@@ -60,7 +60,7 @@ bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_message
 
 # Function to load the CAN_List.txt 
 # CAN_List.txt is a file containing device adresses and a list of orders. This file is basically an encryption device to read and write can messages. It can be easily modified and copy/pasted across all devices.
-def LoadCanList(filename):
+def load_can_list(filename):
     device_id_map = {}
     device_id_reverse_map = {}
     order_id_map = {}
@@ -96,7 +96,7 @@ def LoadCanList(filename):
     return device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map
 
 # Load CAN list mappings
-device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map = LoadCanList('CAN_List.txt')
+device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map = load_can_list('CAN_List.txt')
 
 # Function to send message on the CAN bus
 def can_send(device_id, order_id, data=None, ui=None):
@@ -134,9 +134,9 @@ def can_send(device_id, order_id, data=None, ui=None):
         ui.log_to_terminal(message)
 
 # Class to receive messages from the CAN bus
-class can_receive(can.Listener):
+class CanReceive(can.Listener):
     def __init__(self, ui=None):
-        super(can_receive, self).__init__()
+        super(CanReceive, self).__init__()
         self.last_received_message = None
         self.ui = ui  # Add a reference to the UserInterface instance
 
@@ -335,7 +335,7 @@ def main():
             root.title("VACOP Control v1")
             app = UserInterface(root)
             # Start CAN bus
-            message_listener = can_receive(ui=app)
+            message_listener = CanReceive(ui=app)
             can.Notifier(bus, [message_listener])
             
             while True:
