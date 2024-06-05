@@ -1,9 +1,10 @@
 #BRAKE.py
-#03/06/24
+#04/06/24
 #Rémi Myard
 
 #This code is hosted by the BRAKE device, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
 #It can also control the steering for now but at the end of the project the steering will be controlled by a different node.
+
 
 
 ##################################### Setup ###################################
@@ -28,7 +29,8 @@ device = "BRAKE"
 GPIO.setmode(GPIO.BCM)
 
 # Set PWM frequency (Hz)
-PWM_FREQ = 1000
+PWM_FREQ_steer = 1000
+PWM_FREQ_brake = 20000
 
 # Set GPIO pins for actuator control
 EXTEND_PWM_PIN = 17
@@ -42,11 +44,11 @@ DIR_PIN= 16 # Direction (DIR) GPIO Pin
 PUL_PIN = 26 # Step GPIO Pin
 EN_PIN = 6 # Enable GPIO Pin
 GPIO.setup([DIR_PIN, PUL_PIN, EN_PIN], GPIO.OUT)
-pulse = GPIO.PWM(PUL_PIN, PWM_FREQ)
+pulse = GPIO.PWM(PUL_PIN, PWM_FREQ_steer)
 
 # Create PWM instances
-extend_pwm = GPIO.PWM(EXTEND_PWM_PIN, PWM_FREQ)
-retract_pwm = GPIO.PWM(RETRACT_PWM_PIN, PWM_FREQ)
+extend_pwm = GPIO.PWM(EXTEND_PWM_PIN, PWM_FREQ_brake)
+retract_pwm = GPIO.PWM(RETRACT_PWM_PIN, PWM_FREQ_brake)
 
 # Set GPIO pin for override brake button
 BRAKE_PIN = 24
@@ -59,13 +61,14 @@ MOSI = 20
 CS = 7
 mcp = Adafruit_MCP3008.MCP3008(clk=CLK, cs=CS, miso=MISO, mosi=MOSI)
 
-# Proportional gain (Kp)
-Kp = 2
+# Proportional gain (KP_brake)
+KP_brake = 10
+KP_steer = 1
 
 #Limit the values of the braking actuator
 MAX_EXTEND = 800
 MIN_EXTEND = 300
-THRESHOLD = 10
+THRESHOLD = 4
 
 NO_BRAKE = 500
 FULL_BRAKE = 600
@@ -74,6 +77,8 @@ FULL_BRAKE = 600
 LEFT_LIMIT = 10
 RIGHT_LIMIT = 1013
 NEUTRAL_POSITION = 512
+
+
 
 ############################### FUNCTIONS ###########################################
 
@@ -119,7 +124,7 @@ def load_can_list(filename):
 device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map = load_can_list('CAN_List.txt')
 
 # Function to send message on the CAN bus
-def can_send(bus, device_ID, order_ID, data=None):
+def can_send(device_ID, order_ID, data=None):
     # Convert human-readable IDs to their corresponding hex values
     device_value = device_id_map.get(device_ID)
     order_value = order_id_map.get(order_ID)
@@ -194,7 +199,7 @@ def read_steer_position():
 
 # Function to read acceleration from MCP3008
 last_accel_pedal = None
-def accel():
+def read_accelerator():
     global last_accel_pedal
     
     # Read the current acceleration value from MCP3008
@@ -213,7 +218,7 @@ def accel():
     if accel_pedal != last_accel_pedal:
         # Update the last value
         last_accel_pedal = accel_pedal
-        can_send(bus,"OBU","accel_pedal",accel_pedal)
+        can_send("OBU","accel_pedal",accel_pedal)
 
 # Function to read the manual braking button and send an override message on the can bus
 DEBOUNCE_TIME = 1 #time period during which subsequent interrupts will be ignored
@@ -227,7 +232,7 @@ def brake_override(BRAKE_PIN):
     if current_time - last_callback_time > DEBOUNCE_TIME:
         last_callback_time = current_time
         button_state = 1 if button_state == 0 else 0
-        can_send(bus,"OBU","brake_override",button_state)
+        can_send("OBU","brake_override",button_state)
 
 # Function to control the braking motor
 def brake(brake_pos_set):
@@ -237,25 +242,16 @@ def brake(brake_pos_set):
         print("brake_pos_real = ",brake_pos_real)
         print("brake_pos_set = ",brake_pos_set)
 
-        #Limit the set value
-        if brake_pos_set < MIN_EXTEND:
-            brake_pos_set = MIN_EXTEND
-        
-        if brake_pos_set > MAX_EXTEND:
-            brake_pos_set = MAX_EXTEND
-
         #Check the real value, deactivate movement if necessary. This is to ensure that the actuator stays in the safe limits.
         if brake_pos_real < MIN_EXTEND:
             GPIO.output(RETRACT_EN_PIN, GPIO.LOW)
             print("min extend reached")
-
         else:
             GPIO.output(RETRACT_EN_PIN, GPIO.HIGH)
 
         if brake_pos_real > MAX_EXTEND:
             GPIO.output(EXTEND_EN_PIN, GPIO.LOW)
             print("max extend reached")
-        
         else:
             GPIO.output(EXTEND_EN_PIN, GPIO.HIGH)
         
@@ -263,7 +259,7 @@ def brake(brake_pos_set):
         error = brake_pos_set - brake_pos_real
 
         # Calculate control value
-        control_value = Kp * error
+        control_value = KP_brake * error
         print("ctr_val = ",control_value)
         
         # Map the control value from -100 to 100 for pwm application
@@ -293,6 +289,7 @@ def brake(brake_pos_set):
 def steer(steer_pos_set):
     steer_pos_real = read_steer_position()
     error = steer_pos_set - steer_pos_real
+    control_value = KP_steer * error
         
     #safety mechanism
     if steer_pos_real < LEFT_LIMIT:
@@ -305,12 +302,12 @@ def steer(steer_pos_set):
         GPIO.output(EN_PIN, GPIO.LOW)
 
     #Define direction of spin
-    if error > THRESHOLD:
+    if control_value > THRESHOLD:
         GPIO.output(DIR_PIN, GPIO.HIGH)
         #send pulse
         pulse.ChangeDutyCycle(50)
 
-    elif error < -THRESHOLD:
+    elif control_value < -THRESHOLD:
         GPIO.output(DIR_PIN, GPIO.LOW)
         #send pulse
         pulse.ChangeDutyCycle(50)
@@ -329,33 +326,65 @@ def processor(can_msg):
         #extract data from the can message
         order_id = can_msg[1]
         data = can_msg[2]
+        #memorize last orders
+        last_brake = NO_BRAKE
+        last_steer = NEUTRAL_POSITION
         
         #braking
         if order_id == "brake_set" and data == 0:#can message with no brake
-            brake(NO_BRAKE)
+            last_brake = NO_BRAKE
+
         elif order_id == "brake_set" and data == 1:#can message with full brake
-            brake(FULL_BRAKE)
+            last_brake = FULL_BRAKE
+
         elif order_id == "brake_set" and data != 0 or data != 1: #error in can message
-            brake(NO_BRAKE)
+            last_brake = NO_BRAKE
             print("error")
+        
+        #using the memory last_brake to pilot the braking actuator
+        actual_brake = read_brake_position()
+        if  actual_brake != last_brake:
+            brake(last_brake)
+
         elif button_state == 1: #user is braking, we retract the actuator
             brake(NO_BRAKE)
             print("brake override detected")
 
         #steering
         if order_id == "steer_pos_set":
-            steer(data)
+            last_steer = data
+
+        actual_steer = read_steer_position()
+        if actual_steer != last_steer:
+            steer(last_steer)
 
 # Function to initialise the actuator
-def init():
-    print("position initialization...\n")
+def init(message_listener):
+    print("waiting for starting order...\n")
+    start = False
+    while start is False:
+        can_msg = message_listener.can_input()
+        if can_msg is not None:
+            # Extract data from the can message
+            order_id = can_msg[1] #order_id is the order we received
+            data = can_msg[2] #data is the data attached to the order
+            if order_id == "start":
+                start = True
+    
+    print("braking initialization...\n")
     brake_pos_real = read_brake_position()
     while brake_pos_real != NO_BRAKE:
         brake_pos_real = read_brake_position()
         brake(NO_BRAKE)
-        print("position = ",brake_pos_real)
-        time.sleep(0.1)
-    print("position initialized")
+
+    print("steering initialization...\n")
+    steer_pos_real = read_steer_position()
+    while steer_pos_real != NEUTRAL_POSITION:
+       steer_pos_real = read_steer_position()
+       steer(NEUTRAL_POSITION)
+
+    can_send("OBU","brake_rdy")
+    print("actuators initialized")
 
 
 
@@ -379,7 +408,7 @@ def main():
             GPIO.add_event_detect(BRAKE_PIN, GPIO.BOTH, callback=brake_override)
 
             #Initialise de position of the actuator
-            init()
+            init(message_listener)
             
             while True:
                 # Receive CAN message
@@ -387,7 +416,7 @@ def main():
                 # Process the can message 
                 processor(can_msg)
                 # Read the value from the accelerator pedal and send the acceleration value on the can bus
-                accel()
+                read_accelerator()
             
                 time.sleep(0.1)
 
