@@ -1,8 +1,8 @@
 #BRAKE.py
-#04/06/24
+#06/06/24
 #Rémi Myard
 
-#This code is hosted by the BRAKE device, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
+#This code is hosted by the BRAKE DEVICE, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
 #It can also control the steering for now but at the end of the project the steering will be controlled by a different node.
 
 
@@ -22,15 +22,15 @@ import re
 #Setup the bus
 bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False)
 
-#Set the device as brake. It will setup the device id in the canbus
-device = "BRAKE"
+#Set the DEVICE as brake. It will setup the DEVICE id in the canbus
+DEVICE = "BRAKE"
 
 # Set GPIO mode to BCM
 GPIO.setmode(GPIO.BCM)
 
 # Set PWM frequency (Hz)
-PWM_FREQ_steer = 1000
-PWM_FREQ_brake = 20000
+PWM_FREQ_STEER = 1000
+PWM_FREQ_BRAKE = 20000
 
 # Set GPIO pins for actuator control
 EXTEND_PWM_PIN = 17
@@ -44,11 +44,11 @@ DIR_PIN= 16 # Direction (DIR) GPIO Pin
 PUL_PIN = 26 # Step GPIO Pin
 EN_PIN = 6 # Enable GPIO Pin
 GPIO.setup([DIR_PIN, PUL_PIN, EN_PIN], GPIO.OUT)
-pulse = GPIO.PWM(PUL_PIN, PWM_FREQ_steer)
+pulse = GPIO.PWM(PUL_PIN, PWM_FREQ_STEER)
 
 # Create PWM instances
-extend_pwm = GPIO.PWM(EXTEND_PWM_PIN, PWM_FREQ_brake)
-retract_pwm = GPIO.PWM(RETRACT_PWM_PIN, PWM_FREQ_brake)
+extend_pwm = GPIO.PWM(EXTEND_PWM_PIN, PWM_FREQ_BRAKE)
+retract_pwm = GPIO.PWM(RETRACT_PWM_PIN, PWM_FREQ_BRAKE)
 
 # Set GPIO pin for override brake button
 BRAKE_PIN = 24
@@ -61,22 +61,24 @@ MOSI = 20
 CS = 7
 mcp = Adafruit_MCP3008.MCP3008(clk=CLK, cs=CS, miso=MISO, mosi=MOSI)
 
-# Proportional gain (KP_brake)
-KP_brake = 10
-KP_steer = 1
+# Proportional gain (KP_BRAKE)
+KP_BRAKE = 10
+KP_STEER = 1
 
-#Limit the values of the braking actuator
-MAX_EXTEND = 800
-MIN_EXTEND = 300
-THRESHOLD = 4
+#Setup values of the braking actuator
+BRAKE_MAX_EXTEND = 800
+BRAKE_MIN_EXTEND = 300
+BRAKE_THRESHOLD = 4
 
 NO_BRAKE = 500
 FULL_BRAKE = 600
 
-#Limit the values of the steering actuator
-LEFT_LIMIT = 10
-RIGHT_LIMIT = 1013
+#Setup values of the steering actuator
+STEER_LEFT_LIMIT = 10
+STEER_RIGHT_LIMIT = 1013
 NEUTRAL_POSITION = 512
+
+STEER_THRESHOLD = 5
 
 
 
@@ -180,7 +182,7 @@ class CanReceive(can.Listener):
         device_ID = device_id_reverse_map.get(device_value, device_value)
         order_ID = order_id_reverse_map.get(order_value, order_value)
 
-        if device_ID == device or device_ID == "STEER": #pour l'instant STEER = BRAKE, NE PAS OUBLIER DENLEVER LE OR
+        if device_ID == DEVICE or device_ID == "STEER": #pour l'instant STEER = BRAKE, NE PAS OUBLIER DENLEVER LE OR
             
             print("received:", device_ID, order_ID, data)
             # Return device_ID, order_ID, and data in a tuple
@@ -194,7 +196,6 @@ def read_brake_position():
 # Function to read steer position from MCP3008
 def read_steer_position():
     steer_pos_real = int(mcp.read_adc(2)) #third pin of the mcp on the test bench
-    print("steer_pos_real = ",steer_pos_real)
     return steer_pos_real
 
 # Function to read acceleration from MCP3008
@@ -243,13 +244,13 @@ def brake(brake_pos_set):
         print("brake_pos_set = ",brake_pos_set)
 
         #Check the real value, deactivate movement if necessary. This is to ensure that the actuator stays in the safe limits.
-        if brake_pos_real < MIN_EXTEND:
+        if brake_pos_real < BRAKE_MIN_EXTEND:
             GPIO.output(RETRACT_EN_PIN, GPIO.LOW)
             print("min extend reached")
         else:
             GPIO.output(RETRACT_EN_PIN, GPIO.HIGH)
 
-        if brake_pos_real > MAX_EXTEND:
+        if brake_pos_real > BRAKE_MAX_EXTEND:
             GPIO.output(EXTEND_EN_PIN, GPIO.LOW)
             print("max extend reached")
         else:
@@ -259,7 +260,7 @@ def brake(brake_pos_set):
         error = brake_pos_set - brake_pos_real
 
         # Calculate control value
-        control_value = KP_brake * error
+        control_value = KP_BRAKE * error
         print("ctr_val = ",control_value)
         
         # Map the control value from -100 to 100 for pwm application
@@ -268,7 +269,7 @@ def brake(brake_pos_set):
             control_value = -100
         if control_value > 100:
             control_value = 100
-        if -THRESHOLD<control_value<THRESHOLD:#deadzone (avoid activating the actuator with the noise)
+        if -BRAKE_THRESHOLD<control_value<BRAKE_THRESHOLD:#deadzone (avoid activating the actuator with the noise)
             control_value = 0
 
         # Map control value to duty cycle (this essentially controls the motor speed and direction)
@@ -285,29 +286,41 @@ def brake(brake_pos_set):
     except ValueError:
         print("Invalid input. Please enter a valid integer.")
 
+# Function to deactivate the braking motor
+def deactivate_brake(deactivate):
+    if argument == True:
+        GPIO.output(RETRACT_EN_PIN, GPIO.LOW)
+        GPIO.output(EXTEND_EN_PIN, GPIO.LOW)
+        print("brake deactivated")
+
+    else:
+        GPIO.output(RETRACT_EN_PIN, GPIO.HIGH)
+        GPIO.output(EXTEND_EN_PIN, GPIO.HIGH)
+        print("brake activated")
+
 # Function to control the steering motor
 def steer(steer_pos_set):
     steer_pos_real = read_steer_position()
     error = steer_pos_set - steer_pos_real
-    control_value = KP_steer * error
+    control_value = KP_STEER * error
         
     #safety mechanism
-    if steer_pos_real < LEFT_LIMIT:
+    if steer_pos_real < STEER_LEFT_LIMIT:
         GPIO.output(EN_PIN, GPIO.HIGH) #Desactivate the motor in case of reaching min value
         print("steer min value reached, motor blocked")
-    elif steer_pos_real > RIGHT_LIMIT: #Desactivate the motor in case of reaching max value
+    elif steer_pos_real > STEER_RIGHT_LIMIT: #Desactivate the motor in case of reaching max value
         GPIO.output(EN_PIN, GPIO.HIGH)
         print("steer max value reached, motor blocked")
     else:
         GPIO.output(EN_PIN, GPIO.LOW)
 
     #Define direction of spin
-    if control_value > THRESHOLD:
+    if control_value > STEER_THRESHOLD:
         GPIO.output(DIR_PIN, GPIO.HIGH)
         #send pulse
         pulse.ChangeDutyCycle(50)
 
-    elif control_value < -THRESHOLD:
+    elif control_value < -STEER_THRESHOLD:
         GPIO.output(DIR_PIN, GPIO.LOW)
         #send pulse
         pulse.ChangeDutyCycle(50)
@@ -362,6 +375,7 @@ def processor(can_msg):
 def init(message_listener):
     print("waiting for starting order...\n")
     start = False
+    #We wait for the OBU to send the start message
     while start is False:
         can_msg = message_listener.can_input()
         if can_msg is not None:
@@ -370,18 +384,21 @@ def init(message_listener):
             data = can_msg[2] #data is the data attached to the order
             if order_id == "start":
                 start = True
-    
+    #Once the start message is received we start to initialise the actuators
     print("braking initialization...\n")
     brake_pos_real = read_brake_position()
     while brake_pos_real != NO_BRAKE:
-        brake_pos_real = read_brake_position()
         brake(NO_BRAKE)
-
+        brake_pos_real = read_brake_position()
+        
+    
+    #Once the braking actuator is done, we initialize the steering
     print("steering initialization...\n")
     steer_pos_real = read_steer_position()
     while steer_pos_real != NEUTRAL_POSITION:
-       steer_pos_real = read_steer_position()
        steer(NEUTRAL_POSITION)
+       brake(NO_BRAKE) #We still update the brake during this phase.
+       steer_pos_real = read_steer_position()
 
     can_send("OBU","brake_rdy")
     print("actuators initialized")
