@@ -1,5 +1,5 @@
 #OBU.py
-#05/06/24
+#06/06/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
@@ -171,62 +171,71 @@ class CanReceive(can.Listener):
 
 # Function to control the motors
 # The motors are at the back of the car, with the OBU. The OBU controlls the motors with GPIO, no need for the can bus.
-def propulsion(prop_value):
+def propulsion(prop_set):
     # Map the value
-    prop_value = int((prop_value * 100) / 1023)
+    prop_set = int((prop_set * 100) / 1023)
     # Set the duty cycle of the motors
-    SetTorque.ChangeDutyCycle(prop_value)
+    SetTorque.ChangeDutyCycle(prop_set)
 
 # Function to process can messages and user inputs
 def processor(can_msg, user_msg, ui=None):
     global propulsion_override
     # Extract data from the user message 
-    on_off_state = user_msg[0]
-    driving_mode = user_msg[1]
-    braking_mode = user_msg[2]
-    steering_value = user_msg[3]
-    prop_value = user_msg[4]
+    on_off_state = user_msg[0] #0=off, 1=on
+    driving_mode = user_msg[1] #0=manual, 1=auto
+    brake_set = user_msg[2] #0=NO_BRAKE, 1=FULL_BRAKE
+    steer_set = user_msg[3] #0=FullLeft, 512=middle,1023=FullRight
+    prop_set = user_msg[4] #0=No prop #1023 = FULL prop
 
-    #Automatic mode, braking
-    if ui.last_braking_mode is None or ui.last_braking_mode != braking_mode:
-        if braking_mode == 1 and driving_mode == 1: #braking mode=1 means we want to brake, driving mode=1 mean we are in automatic control
-            can_send("BRAKE", "brake_set", 1, ui)
-        else:  #braking mode=0 means we are not braking
-            can_send("BRAKE", "brake_set", 0, ui)
-        ui.last_braking_mode = braking_mode
-
-    #Automatic mode, propulsion override
-    if driving_mode == 1 and propulsion_override == 0:
-        propulsion(prop_value)
-
-    #If we detect that the user is braking, we stop the propulsion   
-    if propulsion_override == 1:
-        propulsion(0)
-
-    #Automatic mode, steering
-    if ui.last_steering_value is None or ui.last_steering_value != steering_value:
-        if driving_mode == 1:
-            #map value: 
-            mapped_steering_value = int(((steering_value+100)*1023)/200)
-            can_send("STEER", "steer_pos_set", mapped_steering_value, ui)
-        ui.last_steering_value = steering_value
-
-
-    if can_msg is not None:
-        # Extract data from the can message
+    # Extract data from the can message
+    if can_msg is not None :
         order_id = can_msg[1] #order_id is the order we received
         data = can_msg[2] #data is the data attached to the order
+
+    #Manage order_id
+    if can_msg is not None and order_id == "brake_override" and data == 1:
+        propulsion_override = 1 #modify the global variable propulsion_override if we detect that the user is braking
+
+    if can_msg is not None and order_id == "brake_override" and data == 0:
+        propulsion_override = 0
+
+    #Manual mode
+    if driving_mode == 0:
+        if ui.last_braking_mode is None or ui.last_braking_mode != 0:
+            can_send("BRAKE", "brake_set", 0, ui)
+            ui.last_braking_mode = 0
+
+        #Desactivate steering
         
-        if order_id == "brake_override" and data == 1:
-            propulsion_override = 1 #modify the global variable propulsion_override if we detect that the user is braking
-
-        if order_id == "brake_override" and data == 0:
-            propulsion_override = 0
-
-        #Mapyleration, if we are in manual mode, we take order from the accelerator pedal
-        if driving_mode == 0 and order_id == "accel_pedal" and propulsion_override == 0:
+        if can_msg is not None and order_id == "accel_pedal" and propulsion_override == 0:
             propulsion(data)
 
+        if can_msg is not None and order_id == "accel_pedal" and propulsion_override == 1:
+            propulsion(0)
+
+    #Automatic mode
+    else:
+        if ui.last_braking_mode is None or ui.last_braking_mode != brake_set:
+            if brake_set == 1: #brake_set =1 means we want to brake
+                can_send("BRAKE", "brake_set", 1, ui)
+            else:  #braking mode=0 means we are not braking
+                can_send("BRAKE", "brake_set", 0, ui)
+            ui.last_braking_mode = brake_set
+
+        #Propulsion override
+        if driving_mode == 1 and propulsion_override == 0:
+            propulsion(prop_set)
+
+        #If we detect that the user is braking, we stop the propulsion   
+        else:
+            propulsion(0)
+
+        #Steering
+        if ui.last_steering_value is None or ui.last_steering_value != steer_set:
+            #map value: 
+            mapped_steering_value = int(((steer_set+100)*1023)/200)
+            can_send("STEER", "steer_pos_set", mapped_steering_value, ui)
+            ui.last_steering_value = steer_set
 
 
 # Class to interact with the variables, it opens a control pannel where the car can be piloted. 
@@ -238,9 +247,9 @@ class UserInterface:
         # Initialize variables
         self.on_off_state = 0  # Track the on/off state
         self.driving_mode = 0
-        self.braking_mode = 0
-        self.steering_value = 0
-        self.prop_value = 0
+        self.brake_set = 0
+        self.steer_set = 0
+        self.prop_set = 0
         self.last_braking_mode = None  # Track the last braking mode state
         self.last_steering_value = None  # Track the last steering value
 
@@ -327,21 +336,21 @@ class UserInterface:
         self.drive_button.config(text="auto" if self.driving_mode == 1 else "manual")
 
     def toggle_braking_mode(self):
-        self.braking_mode = 1 if self.braking_mode == 0 else 0
-        self.brake_button.config(text="braking" if self.braking_mode == 1 else "not braking")
+        self.brake_set = 1 if self.brake_set == 0 else 0
+        self.brake_button.config(text="braking" if self.brake_set == 1 else "not braking")
 
     def update_steering_value(self, event):
-        self.steering_value = int(self.steering_scale.get())
+        self.steer_set = int(self.steering_scale.get())
 
     def update_propulsion_value(self, event):
-        self.prop_value = int(self.propulsion_scale.get())
+        self.prop_set = int(self.propulsion_scale.get())
 
     def log_to_terminal(self, message):  # This is a terminal that logs the feed of the CAN bus
         self.terminal.insert(tk.END, message + '\n')
         self.terminal.see(tk.END)  # Auto-scroll to the end
 
     def get_values(self):
-        return self.on_off_state, self.driving_mode, self.braking_mode, self.steering_value, self.prop_value
+        return self.on_off_state, self.driving_mode, self.brake_set, self.steer_set, self.prop_set
 
 def init(app,root,message_listener):
     print("waiting for start...\n")
