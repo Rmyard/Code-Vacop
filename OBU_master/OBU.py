@@ -1,9 +1,10 @@
 #OBU.py
-#03/06/24
+#05/06/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
 #It takes inputs from the user and the can_bus, takes decisions and commands all actuators (propulsion, braking, steering)
+
 
 
 ##################################### Setup ###################################
@@ -17,8 +18,8 @@ import time
 import os
 import tkinter as tk
 
-#Set the device as On Board Unit (OBU). It will be used to sort incoming can messages destined to this device
-device = "OBU"
+#Set the DEVICE as On Board Unit (OBU). It will be used to sort incoming can messages destined to this DEVICE
+DEVICE = "OBU"
 
 # Set GPIO mode to BCM
 GPIO.setmode(GPIO.BCM)
@@ -59,7 +60,7 @@ bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_message
 
 
 # Function to load the CAN_List.txt 
-# CAN_List.txt is a file containing device adresses and a list of orders. This file is basically an encryption device to read and write can messages. It can be easily modified and copy/pasted across all devices.
+# CAN_List.txt is a file containing DEVICE adresses and a list of orders. This file is basically an encryption DEVICE to read and write can messages. It can be easily modified and copy/pasted across all devices.
 def load_can_list(filename):
     device_id_map = {}
     device_id_reverse_map = {}
@@ -160,7 +161,7 @@ class CanReceive(can.Listener):
         device_id = device_id_reverse_map.get(device_value, device_value)
         order_id = order_id_reverse_map.get(order_value, order_value)
 
-        if device_id == device:  # only process messages destined to this device
+        if device_id == DEVICE:  # only process messages destined to this DEVICE
             message = f"received: {device_id} {order_id} {data}"
             # Log to the terminal
             if self.ui:
@@ -180,16 +181,17 @@ def propulsion(prop_value):
 def processor(can_msg, user_msg, ui=None):
     global propulsion_override
     # Extract data from the user message 
-    driving_mode = user_msg[0]
-    braking_mode = user_msg[1]
-    steering_value = user_msg[2]
-    prop_value = user_msg[3]
+    on_off_state = user_msg[0]
+    driving_mode = user_msg[1]
+    braking_mode = user_msg[2]
+    steering_value = user_msg[3]
+    prop_value = user_msg[4]
 
     #Automatic mode, braking
     if ui.last_braking_mode is None or ui.last_braking_mode != braking_mode:
         if braking_mode == 1 and driving_mode == 1: #braking mode=1 means we want to brake, driving mode=1 mean we are in automatic control
             can_send("BRAKE", "brake_set", 1, ui)
-        elif braking_mode == 0: #braking mode=0 means we are not braking
+        else:  #braking mode=0 means we are not braking
             can_send("BRAKE", "brake_set", 0, ui)
         ui.last_braking_mode = braking_mode
 
@@ -221,9 +223,10 @@ def processor(can_msg, user_msg, ui=None):
         if order_id == "brake_override" and data == 0:
             propulsion_override = 0
 
-        #Manual acceleration, if we are in manual mode, we take order from the accelerator pedal
+        #Mapyleration, if we are in manual mode, we take order from the accelerator pedal
         if driving_mode == 0 and order_id == "accel_pedal" and propulsion_override == 0:
             propulsion(data)
+
 
 
 # Class to interact with the variables, it opens a control pannel where the car can be piloted. 
@@ -233,16 +236,29 @@ class UserInterface:
         self.root = root
 
         # Initialize variables
+        self.on_off_state = 0  # Track the on/off state
         self.driving_mode = 0
         self.braking_mode = 0
         self.steering_value = 0
         self.prop_value = 0
         self.last_braking_mode = None  # Track the last braking mode state
-        self.last_steering_value = None # Track the last steering value
+        self.last_steering_value = None  # Track the last steering value
 
         # Create a frame to hold the controls
         frame_controls = tk.Frame(root)
         frame_controls.pack(side=tk.LEFT, pady=20, padx=20)
+
+        # Create a frame to hold the label and button for start/stop
+        frame_start_stop = tk.Frame(frame_controls)
+        frame_start_stop.pack(pady=10)
+
+        # Create a label for start/stop
+        self.label_start_stop = tk.Label(frame_start_stop, text="Start/Stop", font=('Helvetica', 16))
+        self.label_start_stop.pack(side=tk.LEFT)
+
+        # Create a button for start/stop
+        self.start_stop_button = tk.Button(frame_start_stop, text="off", command=self.toggle_on_off_state, font=('Helvetica', 16), width=10, height=3)
+        self.start_stop_button.pack(side=tk.LEFT)
 
         # Create a frame to hold the label and button for driving mode
         frame_drive = tk.Frame(frame_controls)
@@ -302,6 +318,10 @@ class UserInterface:
         self.steering_scale.bind("<ButtonRelease-1>", self.update_steering_value)
         self.propulsion_scale.bind("<ButtonRelease-1>", self.update_propulsion_value)
 
+    def toggle_on_off_state(self):
+        self.on_off_state = 1 if self.on_off_state == 0 else 0
+        self.start_stop_button.config(text="on" if self.on_off_state == 1 else "off")
+
     def toggle_driving_mode(self):
         self.driving_mode = 1 if self.driving_mode == 0 else 0
         self.drive_button.config(text="auto" if self.driving_mode == 1 else "manual")
@@ -316,12 +336,44 @@ class UserInterface:
     def update_propulsion_value(self, event):
         self.prop_value = int(self.propulsion_scale.get())
 
-    def log_to_terminal(self, message):#this is a terminal that log the feed of the can bus
+    def log_to_terminal(self, message):  # This is a terminal that logs the feed of the CAN bus
         self.terminal.insert(tk.END, message + '\n')
         self.terminal.see(tk.END)  # Auto-scroll to the end
 
     def get_values(self):
-        return self.driving_mode, self.braking_mode, self.steering_value, self.prop_value
+        return self.on_off_state, self.driving_mode, self.braking_mode, self.steering_value, self.prop_value
+
+def init(app,root,message_listener):
+    print("waiting for start...\n")
+    on_off_state = 0
+    # We wait the user to start the VACOP
+    while on_off_state == 0:
+        root.update()
+        user_msg = app.get_values()
+        on_off_state = user_msg[0]
+        if on_off_state == 1:
+            print("initialization...\n")
+            can_send("BRAKE", "start", 0, app)#When the VACOP is started, we send a start message on the can bus to initialise the actuators.
+            can_send("STEER", "start", 0, app) 
+    print("waiting for devices to be ready...\n")
+    ready = False
+    # We wait the devices to reply the initialisation message
+    while ready is False:   
+        root.update()
+        can_msg = message_listener.can_input()
+        if can_msg is not None:
+            # Extract data from the can message
+            order_id = can_msg[1] #order_id is the order we received
+            data = can_msg[2] #data is the data attached to the order
+            if order_id == "brake_rdy":
+                ready = True
+            if order_id == "brake_not_rdy":
+                ready = False
+                print("One of the devices encountered a problem")
+    print("Ready to use")
+
+
+
 
 #################################### MAIN ###################################################
 
@@ -329,14 +381,20 @@ def main():
     global propulsion_override
     try:
         with can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False) as bus:
-            # Initialise variables
+            # Initialize variables
             propulsion_override = 0
+            
+            # Initialize user interface
             root = tk.Tk()
             root.title("VACOP Control v1")
             app = UserInterface(root)
+
             # Start CAN bus
             message_listener = CanReceive(ui=app)
             can.Notifier(bus, [message_listener])
+
+            # Initialize VACOP
+            init(app,root,message_listener)
             
             while True:
                 # Receive CAN message (from the devices: BRAKE or STEER)
@@ -348,6 +406,7 @@ def main():
                 processor(can_msg, user_msg, ui=app)  # Pass the ui object here
                 #Time sleep is mendatory for now because if the loop runs too fast the can bus crashes.
                 time.sleep(0.1)
+
 
     except KeyboardInterrupt:
         print("Exiting...")
