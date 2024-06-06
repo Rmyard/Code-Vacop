@@ -401,6 +401,9 @@ def init(message_listener):
        steer_pos_real = read_steer_position()
 
     can_send("OBU","brake_rdy")
+    can_send("OBU","brake_rdy")
+    can_send("OBU","brake_rdy")
+
     print("actuators initialized")
 
 
