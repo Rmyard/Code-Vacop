@@ -1,5 +1,5 @@
 #OBU.py
-#06/06/24
+#07/06/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
@@ -140,6 +140,7 @@ class CanReceive(can.Listener):
         super(CanReceive, self).__init__()
         self.last_received_message = None
         self.ui = ui  # Add a reference to the UserInterface instance
+        self.last_data = {}  # Dictionary to store the last data for each device-order
 
     def on_message_received(self, msg):
         self.last_received_message = msg
@@ -162,12 +163,17 @@ class CanReceive(can.Listener):
         order_id = order_id_reverse_map.get(order_value, order_value)
 
         if device_id == DEVICE:  # only process messages destined to this DEVICE
-            message = f"received: {device_id} {order_id} {data}"
-            # Log to the terminal
-            if self.ui:
-                self.ui.log_to_terminal(message)
+            key = (device_id, order_id)
+            if key not in self.last_data or self.last_data[key] != data:
+                message = f"received: {device_id} {order_id} {data}"
+                # Log to the terminal
+                if self.ui:
+                    self.ui.log_to_terminal(message)
+                # Update the last data
+                self.last_data[key] = data
             # Return device_ID, order_id, and data in a tuple
             return device_id, order_id, data
+
 
 # Function to control the motors
 # The motors are at the back of the car, with the OBU. The OBU controlls the motors with GPIO, no need for the can bus.
@@ -193,11 +199,13 @@ def processor(can_msg, user_msg, ui=None):
         data = can_msg[2] #data is the data attached to the order
 
     #Manage order_id
-    if can_msg is not None and order_id == "brake_override" and data == 1:
+    if can_msg is not None and order_id == "prop_override" and data == 1:
         propulsion_override = 1 #modify the global variable propulsion_override if we detect that the user is braking
+        
 
-    if can_msg is not None and order_id == "brake_override" and data == 0:
+    if can_msg is not None and order_id == "prop_override" and data == 0:
         propulsion_override = 0
+        
 
     #Manual mode
     if driving_mode == 0:
@@ -215,12 +223,15 @@ def processor(can_msg, user_msg, ui=None):
 
     #Automatic mode
     else:
-        if ui.last_braking_mode is None or ui.last_braking_mode != brake_set:
-            if brake_set == 1: #brake_set =1 means we want to brake
-                can_send("BRAKE", "brake_set", 1, ui)
-            else:  #braking mode=0 means we are not braking
-                can_send("BRAKE", "brake_set", 0, ui)
-            ui.last_braking_mode = brake_set
+        if propulsion_override == 1:    
+            can_send("BRAKE", "brake_set", 0, ui)
+        else:
+            if ui.last_braking_mode is None or ui.last_braking_mode != brake_set:
+                if brake_set == 1: #brake_set =1 means we want to brake
+                    can_send("BRAKE", "brake_set", 1, ui)
+                else:  #braking mode=0 means we are not braking
+                    can_send("BRAKE", "brake_set", 0, ui)
+                ui.last_braking_mode = brake_set
 
         #Propulsion override
         if driving_mode == 1 and propulsion_override == 0:
@@ -352,34 +363,39 @@ class UserInterface:
     def get_values(self):
         return self.on_off_state, self.driving_mode, self.brake_set, self.steer_set, self.prop_set
 
-def init(app,root,message_listener):
+def init(app, root, message_listener):
     print("waiting for start...\n")
     on_off_state = 0
     # We wait the user to start the VACOP
     while on_off_state == 0:
         root.update()
-        user_msg = app.get_values()
+        user_msg = app.get_values() # wait for the start button to be pressed
         on_off_state = user_msg[0]
         if on_off_state == 1:
             print("initialization...\n")
-            can_send("BRAKE", "start", 0, app)#When the VACOP is started, we send a start message on the can bus to initialise the actuators.
-            can_send("STEER", "start", 0, app) 
+            can_send("BRAKE", "start", 0, app) # When the VACOP is started, we send a start message on the can bus to initialise the actuators.
+            can_send("STEER", "start", 0, app)
     print("waiting for devices to be ready...\n")
     ready = False
     # We wait the devices to reply the initialisation message
-    while ready is False:   
+    while ready is False:
         root.update()
         can_msg = message_listener.can_input()
         if can_msg is not None:
             # Extract data from the can message
-            order_id = can_msg[1] #order_id is the order we received
-            data = can_msg[2] #data is the data attached to the order
-            if order_id == "brake_rdy":
+            order_id = can_msg[1] # order_id is the order we received
+            data = can_msg[2] # data is the data attached to the order
+            if order_id == "brake_rdy": # we wait for the actuators response
                 ready = True
             if order_id == "brake_not_rdy":
                 ready = False
                 print("One of the devices encountered a problem")
+
+    # We enable movement of the actuators
+    can_send("BRAKE","brake_enable",None,app)
+    can_send("STEER","steer_enable",None,app)
     print("Ready to use")
+    return
 
 
 
@@ -402,23 +418,33 @@ def main():
             message_listener = CanReceive(ui=app)
             can.Notifier(bus, [message_listener])
 
-            # Initialize VACOP
-            init(app,root,message_listener)
-            
             while True:
-                # Receive CAN message (from the devices: BRAKE or STEER)
-                can_msg = message_listener.can_input()
-                # Receive inputs from user 
-                root.update()
-                user_msg = app.get_values()
-                # Process CAN messages and user messages, takes decisions and send orders to the devices
-                processor(can_msg, user_msg, ui=app)  # Pass the ui object here
-                #Time sleep is mendatory for now because if the loop runs too fast the can bus crashes.
-                time.sleep(0.1)
-
+                # Initialize VACOP
+                init(app, root, message_listener)
+                
+                # Main operational loop
+                running = True
+                while running:
+                    # Receive CAN message (from the devices: BRAKE or STEER)
+                    can_msg = message_listener.can_input()
+                    # Receive inputs from user 
+                    root.update()
+                    user_msg = app.get_values()
+                    
+                    # Check if the on/off button has been pressed to stop the system
+                    if user_msg[0] == 0:
+                        print("System stopped.\n\n\n")
+                        running = False
+                        break
+                    
+                    # Process CAN messages and user messages, takes decisions and send orders to the devices
+                    processor(can_msg, user_msg, ui=app)  # Pass the ui object here
+                    # Time sleep is mandatory for now because if the loop runs too fast the can bus crashes.
+                    time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("Exiting...")
+        can_send("BRAKE", "stop")
 
     finally:
         bus.shutdown()
