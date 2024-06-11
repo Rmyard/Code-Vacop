@@ -1,5 +1,5 @@
 #OBU.py
-#07/06/24
+#11/06/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
@@ -100,7 +100,10 @@ def load_can_list(filename):
 device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map = load_can_list('CAN_List.txt')
 
 # Function to send message on the CAN bus
+last_sent_message = None
 def can_send(device_id, order_id, data=None, ui=None):
+    global last_sent_message
+    
     # Convert human-readable IDs to their corresponding hex values
     device_value = device_id_map.get(device_id)
     order_value = order_id_map.get(order_id)
@@ -108,6 +111,8 @@ def can_send(device_id, order_id, data=None, ui=None):
     if device_value is None or order_value is None:
         raise ValueError("Invalid device_id or order_id")
     
+    actual_message = 
+
     # Create a CAN message with device_value followed by order_value
     arbitration_id = int(device_value + order_value, 16)
 
@@ -185,13 +190,14 @@ def propulsion(prop_set):
 
 # Function to process can messages and user inputs
 def processor(can_msg, user_msg, ui=None):
-    global propulsion_override
+    global prop_override
+    global manual_prop_set
     # Extract data from the user message 
     on_off_state = user_msg[0] #0=off, 1=on
     driving_mode = user_msg[1] #0=manual, 1=auto
-    brake_set = user_msg[2] #0=NO_BRAKE, 1=FULL_BRAKE
-    steer_set = user_msg[3] #0=FullLeft, 512=middle,1023=FullRight
-    prop_set = user_msg[4] #0=No prop #1023 = FULL prop
+    auto_brake_set = user_msg[2] #0=NO_BRAKE, 1=FULL_BRAKE
+    auto_steer_set = user_msg[3] #0=FullLeft, 512=middle,1023=FullRight
+    auto_prop_set = user_msg[4] #0=No prop #1023 = FULL prop
 
     # Extract data from the can message
     if can_msg is not None :
@@ -199,54 +205,60 @@ def processor(can_msg, user_msg, ui=None):
         data = can_msg[2] #data is the data attached to the order
 
     #Manage order_id
-    if can_msg is not None and order_id == "prop_override" and data == 1:
-        propulsion_override = 1 #modify the global variable propulsion_override if we detect that the user is braking
-        
+    if can_msg is not None:
+        if order_id == "prop_override" and data == 1:
+            prop_override = 1 #modify the global variable prop_override if we detect that the user is braking
+            
+        if order_id == "prop_override" and data == 0:
+            prop_override = 0
 
-    if can_msg is not None and order_id == "prop_override" and data == 0:
-        propulsion_override = 0
+        if order_id == "accel_pedal":
+            manual_prop_set = data
         
 
     #Manual mode
     if driving_mode == 0:
+        #reset braking
         if ui.last_braking_mode is None or ui.last_braking_mode != 0:
             can_send("BRAKE", "brake_set", 0, ui)
             ui.last_braking_mode = 0
 
-        #Desactivate steering
+        #steering
+            #Desactivate steering
         
-        if can_msg is not None and order_id == "accel_pedal" and propulsion_override == 0:
-            propulsion(data)
+        #propulsion
+        if prop_override == 0:
+            propulsion(manual_prop_set)
 
-        if can_msg is not None and order_id == "accel_pedal" and propulsion_override == 1:
+        else:
             propulsion(0)
 
     #Automatic mode
     else:
-        if propulsion_override == 1:    
+        #prop_override -> reset brake & propulsion=0
+        if prop_override == 1:    
+            #brake
             can_send("BRAKE", "brake_set", 0, ui)
+            #propulsion
+            propulsion(0)
         else:
-            if ui.last_braking_mode is None or ui.last_braking_mode != brake_set:
-                if brake_set == 1: #brake_set =1 means we want to brake
+            #brake
+            if ui.last_braking_mode is None or ui.last_braking_mode != auto_brake_set:
+                if auto_brake_set == 1: #brake_set =1 means we want to brake
                     can_send("BRAKE", "brake_set", 1, ui)
                 else:  #braking mode=0 means we are not braking
                     can_send("BRAKE", "brake_set", 0, ui)
-                ui.last_braking_mode = brake_set
+                ui.last_braking_mode = auto_brake_set
+            #propulsion
+            propulsion(auto_prop_set)
 
-        #Propulsion override
-        if driving_mode == 1 and propulsion_override == 0:
-            propulsion(prop_set)
-
-        #If we detect that the user is braking, we stop the propulsion   
-        else:
-            propulsion(0)
-
+        
         #Steering
-        if ui.last_steering_value is None or ui.last_steering_value != steer_set:
+        if ui.last_steering_value is None or ui.last_steering_value != auto_steer_set:
             #map value: 
-            mapped_steering_value = int(((steer_set+100)*1023)/200)
+            mapped_steering_value = int(((auto_steer_set+100)*1023)/200)
             can_send("STEER", "steer_pos_set", mapped_steering_value, ui)
-            ui.last_steering_value = steer_set
+            ui.last_steering_value = auto_steer_set
 
 
 # Class to interact with the variables, it opens a control pannel where the car can be piloted. 
@@ -258,9 +270,9 @@ class UserInterface:
         # Initialize variables
         self.on_off_state = 0  # Track the on/off state
         self.driving_mode = 0
-        self.brake_set = 0
-        self.steer_set = 0
-        self.prop_set = 0
+        self.auto_brake_set = 0
+        self.auto_steer_set = 0
+        self.auto_prop_set = 0
         self.last_braking_mode = None  # Track the last braking mode state
         self.last_steering_value = None  # Track the last steering value
 
@@ -330,6 +342,18 @@ class UserInterface:
         self.propulsion_scale.set(0)  # Initial value at the left
         self.propulsion_scale.pack(side=tk.LEFT)
 
+        # Create a frame to hold the label and value for propulsion override
+        frame_override = tk.Frame(frame_controls)
+        frame_override.pack(pady=10)
+
+        # Create a label for propulsion override
+        self.label_override = tk.Label(frame_override, text="Propulsion Override:", font=('Helvetica', 16))
+        self.label_override.pack(side=tk.LEFT)
+
+        # Create a variable to display the propulsion override value
+        self.label_override_value = tk.Label(frame_override, text="0", font=('Helvetica', 16))
+        self.label_override_value.pack(side=tk.LEFT)
+
         # Create a text widget to act as a terminal
         self.terminal = tk.Text(root, height=20, width=50, font=('Helvetica', 12))
         self.terminal.pack(side=tk.RIGHT, padx=20, pady=20)
@@ -347,21 +371,24 @@ class UserInterface:
         self.drive_button.config(text="auto" if self.driving_mode == 1 else "manual")
 
     def toggle_braking_mode(self):
-        self.brake_set = 1 if self.brake_set == 0 else 0
-        self.brake_button.config(text="braking" if self.brake_set == 1 else "not braking")
+        self.auto_brake_set = 1 if self.auto_brake_set == 0 else 0
+        self.brake_button.config(text="braking" if self.auto_brake_set == 1 else "not braking")
 
     def update_steering_value(self, event):
-        self.steer_set = int(self.steering_scale.get())
+        self.auto_steer_set = int(self.steering_scale.get())
 
     def update_propulsion_value(self, event):
-        self.prop_set = int(self.propulsion_scale.get())
+        self.auto_prop_set = int(self.propulsion_scale.get())
 
     def log_to_terminal(self, message):  # This is a terminal that logs the feed of the CAN bus
         self.terminal.insert(tk.END, message + '\n')
         self.terminal.see(tk.END)  # Auto-scroll to the end
 
-    def get_values(self):
-        return self.on_off_state, self.driving_mode, self.brake_set, self.steer_set, self.prop_set
+    def ui_output_variables(self):
+        return self.on_off_state, self.driving_mode, self.auto_brake_set, self.auto_steer_set, self.auto_prop_set
+
+    def ui_input_variables(self, override_value):
+        self.label_override_value.config(text=str(override_value))
 
 def init(app, root, message_listener):
     print("waiting for start...\n")
@@ -369,7 +396,7 @@ def init(app, root, message_listener):
     # We wait the user to start the VACOP
     while on_off_state == 0:
         root.update()
-        user_msg = app.get_values() # wait for the start button to be pressed
+        user_msg = app.ui_output_variables() # wait for the start button to be pressed
         on_off_state = user_msg[0]
         if on_off_state == 1:
             print("initialization...\n")
@@ -403,11 +430,13 @@ def init(app, root, message_listener):
 #################################### MAIN ###################################################
 
 def main():
-    global propulsion_override
+    global prop_override
+    global manual_prop_set
     try:
         with can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False) as bus:
             # Initialize variables
-            propulsion_override = 0
+            prop_override = 0
+            manual_prop_set = 0
             
             # Initialize user interface
             root = tk.Tk()
@@ -429,7 +458,10 @@ def main():
                     can_msg = message_listener.can_input()
                     # Receive inputs from user 
                     root.update()
-                    user_msg = app.get_values()
+                    user_msg = app.ui_output_variables()
+
+                    # Send outputs to user
+                    app.ui_input_variables(prop_override)
                     
                     # Check if the on/off button has been pressed to stop the system
                     if user_msg[0] == 0:
@@ -439,8 +471,6 @@ def main():
                     
                     # Process CAN messages and user messages, takes decisions and send orders to the devices
                     processor(can_msg, user_msg, ui=app)  # Pass the ui object here
-                    # Time sleep is mandatory for now because if the loop runs too fast the can bus crashes.
-                    time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("Exiting...")
