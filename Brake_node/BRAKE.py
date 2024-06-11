@@ -1,5 +1,5 @@
 #BRAKE.py
-#07/06/24
+#11/06/24
 #Rémi Myard
 
 #This code is hosted by the BRAKE DEVICE, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
@@ -198,6 +198,7 @@ def read_steer_position():
 
 # Function to read acceleration from MCP3008
 last_accel_pedal = None
+ACCEL_THRESHOLD = 10
 def read_accelerator():
     global last_accel_pedal
     
@@ -213,26 +214,23 @@ def read_accelerator():
     # Map the value
     accel_pedal = int(((accel_pedal - 170) / (875 - 170)) * 1023)
 
-    # Check if the new value is different from the last value
-    if accel_pedal != last_accel_pedal:
+    # Check if the new value differs from the last value by more than the threshold
+    if last_accel_pedal is None or abs(accel_pedal - last_accel_pedal) > ACCEL_THRESHOLD:
         # Update the last value
         last_accel_pedal = accel_pedal
         can_send("OBU","accel_pedal",accel_pedal)
 
 # Function to read the manual braking button and send an override message on the can bus
-DEBOUNCE_TIME = 1 #time period during which subsequent interrupts will be ignored
-last_callback_time = 0 #initialise the last callback time for the button
 button_state = 0
 def brake_override(BRAKE_PIN):
-    global last_callback_time
     global button_state
-    current_time = int(time.time() * 1000)  # Convert current time to milliseconds
-    
-    if current_time - last_callback_time > DEBOUNCE_TIME:
-        last_callback_time = current_time
-        button_state = 1 if button_state == 0 else 0
+    if GPIO.input(BRAKE_PIN) == GPIO.HIGH:
+        button_state = 1
         can_send("OBU","prop_override",button_state)
-        
+    else:
+        button_state = 0
+        can_send("OBU","prop_override",button_state)
+
 # Function to control the braking motor
 def brake(brake_pos_set):
     try:
@@ -428,7 +426,7 @@ def main():
             pulse.start(0)
 
             #Start button event detection
-            GPIO.add_event_detect(BRAKE_PIN, GPIO.BOTH, callback=brake_override)
+            GPIO.add_event_detect(BRAKE_PIN, GPIO.BOTH, callback=brake_override, bouncetime=20)
 
             #Initialise de position of the actuator
             init(message_listener)
@@ -440,8 +438,6 @@ def main():
                 processor(can_msg)
                 # Read the value from the accelerator pedal and send the acceleration value on the can bus
                 read_accelerator()
-            
-                time.sleep(0.1)
 
     
     except KeyboardInterrupt:
