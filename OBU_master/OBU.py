@@ -27,8 +27,9 @@ GPIO.setmode(GPIO.BCM)
 # Set GPIO pins for the propulsion controller
 DIR_POSITIVE = 27 #make the car go forward
 DIR_NEGATIVE = 23 #make the car go backward
-SetTorquePin = 17 #set the current applied to the motors
-CurrentLimitPin = 22 #set the current limit of the motors
+SET_TORQUE_PIN = 17 #set the current applied to the motors
+CURRENT_LIMIT_PIN = 22 #set the current limit of the motors
+STO_PIN = 16 #Set Torque Off
 
 # Set PWM frequency (Hz)
 PWM_FREQ = 5000
@@ -36,16 +37,18 @@ PWM_FREQ = 5000
 # Pilot the motor
 GPIO.setup(DIR_POSITIVE, GPIO.OUT)
 GPIO.setup(DIR_NEGATIVE, GPIO.OUT)
-GPIO.setup(SetTorquePin, GPIO.OUT)
-GPIO.setup(CurrentLimitPin, GPIO.OUT)
+GPIO.setup(SET_TORQUE_PIN, GPIO.OUT)
+GPIO.setup(CURRENT_LIMIT_PIN, GPIO.OUT)
+GPIO.setup(STO_PIN, GPIO.OUT)
 
 # Set the initial direction
 GPIO.output(DIR_POSITIVE, GPIO.HIGH) #for now we can only go forward
 GPIO.output(DIR_NEGATIVE, GPIO.LOW)
+GPIO.output(STO_PIN, GPIO.HIGH) #for now the motor is always enabled
 
-# Initialize PWM for SetTorquePin
-SetTorque = GPIO.PWM(SetTorquePin, PWM_FREQ)
-CurrentLimit = GPIO.PWM(CurrentLimitPin, PWM_FREQ)
+# Initialize PWM for SET_TORQUE_PIN
+SetTorque = GPIO.PWM(SET_TORQUE_PIN, PWM_FREQ)
+CurrentLimit = GPIO.PWM(CURRENT_LIMIT_PIN, PWM_FREQ)
 
 # Start PWM with 0% duty cycle
 SetTorque.start(0)
@@ -239,36 +242,27 @@ def processor(can_msg, user_msg, ui=None):
 
     #Automatic mode
     else:
-        #prop_override -> reset brake & propulsion=0
-        if prop_override == 1:    
-            #brake
-            if ui.last_braking_mode is None or ui.last_braking_mode != 0:
+        
+        #Brake
+        if ui.last_braking_mode is None or ui.last_braking_mode != auto_brake_set:
+            if auto_brake_set == 1: #brake_set =1 means we want to brake
+                can_send("BRAKE", "brake_set", 1, ui)
+            else:  #auto_brake_ser == 0 means we are not braking
                 can_send("BRAKE", "brake_set", 0, ui)
-                ui.last_braking_mode = 0
-            #propulsion
-            propulsion(0)
+            ui.last_braking_mode = auto_brake_set
+        
+        #Propulsion
+        if auto_brake_set == 0:
+            propulsion(auto_prop_set)
+        
         else:
-            #brake
-            if ui.last_braking_mode is None or ui.last_braking_mode != auto_brake_set:
-                if auto_brake_set == 1: #brake_set =1 means we want to brake
-                    can_send("BRAKE", "brake_set", 1, ui)
-                else:  #auto_brake_ser == 0 means we are not braking
-                    can_send("BRAKE", "brake_set", 0, ui)
-                ui.last_braking_mode = auto_brake_set
-            
-            #propulsion
-            if auto_brake_set == 0: #if we are not braking we can accelerate
-                propulsion(auto_prop_set)
-            
-            else: #if we are braking we stop the motor
-                propulsion(0)
+            propulsion(0)
 
         
         #Steering
         if last_steer_enable is None or last_steer_enable != 1:
             can_send("BRAKE", "steer_enable", 1, ui)
             last_steer_enable = 1
-            print(last_steer_enable)
 
         if ui.last_steering_value is None or ui.last_steering_value != auto_steer_set:
             #map value: 
