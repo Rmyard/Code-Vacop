@@ -1,5 +1,5 @@
 #OBU.py
-#11/06/24
+#12/06/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
@@ -186,9 +186,14 @@ def propulsion(prop_set):
     SetTorque.ChangeDutyCycle(prop_set)
 
 # Function to process can messages and user inputs
+# Initialize variables
+prop_override = 0
+manual_prop_set = 0
+last_steer_enable = 0
 def processor(can_msg, user_msg, ui=None):
     global prop_override
     global manual_prop_set
+    global last_steer_enable
     # Extract data from the user message 
     on_off_state = user_msg[0] #0=off, 1=on
     driving_mode = user_msg[1] #0=manual, 1=auto
@@ -221,7 +226,9 @@ def processor(can_msg, user_msg, ui=None):
             ui.last_braking_mode = 0
 
         #steering
-            #Desactivate steering
+        if last_steer_enable is None or last_steer_enable != 0:
+            can_send("BRAKE", "steer_enable", 0, ui)
+            last_steer_enable = 0
         
         #propulsion
         if prop_override == 0:
@@ -245,14 +252,24 @@ def processor(can_msg, user_msg, ui=None):
             if ui.last_braking_mode is None or ui.last_braking_mode != auto_brake_set:
                 if auto_brake_set == 1: #brake_set =1 means we want to brake
                     can_send("BRAKE", "brake_set", 1, ui)
-                else:  #braking mode=0 means we are not braking
+                else:  #auto_brake_ser == 0 means we are not braking
                     can_send("BRAKE", "brake_set", 0, ui)
                 ui.last_braking_mode = auto_brake_set
+            
             #propulsion
-            propulsion(auto_prop_set)
+            if auto_brake_set == 0: #if we are not braking we can accelerate
+                propulsion(auto_prop_set)
+            
+            else: #if we are braking we stop the motor
+                propulsion(0)
 
         
         #Steering
+        if last_steer_enable is None or last_steer_enable != 1:
+            can_send("BRAKE", "steer_enable", 1, ui)
+            last_steer_enable = 1
+            print(last_steer_enable)
+
         if ui.last_steering_value is None or ui.last_steering_value != auto_steer_set:
             #map value: 
             mapped_steering_value = int(((auto_steer_set+100)*1023)/200)
@@ -429,13 +446,9 @@ def init(app, root, message_listener):
 #################################### MAIN ###################################################
 
 def main():
-    global prop_override
-    global manual_prop_set
     try:
         with can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False) as bus:
-            # Initialize variables
-            prop_override = 0
-            manual_prop_set = 0
+            
             
             # Initialize user interface
             root = tk.Tk()
