@@ -152,7 +152,7 @@ def can_send(device_ID, order_ID, data=None):
 
     # Send the message on the CAN bus
     bus.send(can_message)
-    print("sent:", device_ID, order_ID, data)
+    #print("sent:", device_ID, order_ID, data)
 
 # Function to receive messages from the CAN bus
 class CanReceive(can.Listener):
@@ -182,7 +182,7 @@ class CanReceive(can.Listener):
 
         if device_ID == DEVICE or device_ID == "STEER": #pour l'instant STEER = BRAKE, NE PAS OUBLIER DENLEVER LE OR
             
-            print("received:", device_ID, order_ID, data)
+            #print("received:", device_ID, order_ID, data)
             # Return device_ID, order_ID, and data in a tuple
             return device_ID, order_ID, data
 
@@ -224,12 +224,16 @@ def read_accelerator():
 button_state = 0
 def brake_override(BRAKE_PIN):
     global button_state
+
     if GPIO.input(BRAKE_PIN) == GPIO.HIGH:
         button_state = 1
-        can_send("OBU","prop_override",button_state)
+        can_send("OBU", "prop_override", button_state)
     else:
         button_state = 0
-        can_send("OBU","prop_override",button_state)
+        can_send("OBU", "prop_override", button_state)
+    
+
+    
 
 # Function to control the braking motor
 def brake(brake_pos_set):
@@ -258,6 +262,7 @@ def brake(brake_pos_set):
         # Calculate control value
         control_value = KP_BRAKE * error
         #print("ctr_val = ",control_value)
+        print("control value = ", control_value)
         
         # Map the control value from -100 to 100 for pwm application
         control_value = int((control_value/1023) * 100)
@@ -345,13 +350,7 @@ def processor(can_msg):
 
         if order_id == "brake_set" and data == 1:#can message with full brake
             last_brake = FULL_BRAKE
-
-        
-        #using the memory last_brake to pilot the braking actuator
-        actual_brake = read_brake_position()
-        if  actual_brake != last_brake:
-            brake(last_brake)
-
+       
         #steering
         if order_id == "steer_pos_set":
             last_steer = data
@@ -359,12 +358,19 @@ def processor(can_msg):
         if order_id == "steer_enable":
             steer_enable = data
 
-        actual_steer = read_steer_position()
-        if actual_steer != last_steer:
-            if steer_enable == 0:
-                steer(last_steer, False)
-            else:
-                steer(last_steer, True)
+        
+
+    #using the memory last_brake to pilot the braking actuator
+    actual_brake = read_brake_position()
+    if  actual_brake != last_brake:
+        brake(last_brake)
+
+    actual_steer = read_steer_position()
+    if actual_steer != last_steer:
+        if steer_enable == 0:
+            steer(last_steer, False)
+        else:
+            steer(last_steer, True)
 
 # Function to initialise the actuators
 def init(message_listener):
