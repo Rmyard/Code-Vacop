@@ -1,5 +1,5 @@
 #BRAKE.py
-#11/06/24
+#12/06/24
 #Rémi Myard
 
 #This code is hosted by the BRAKE DEVICE, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
@@ -76,7 +76,7 @@ STEER_LEFT_LIMIT = 10
 STEER_RIGHT_LIMIT = 1013
 NEUTRAL_POSITION = 512
 
-STEER_THRESHOLD = 5
+STEER_THRESHOLD = 10
 
 
 
@@ -283,78 +283,67 @@ def brake(brake_pos_set):
         print("Invalid input. Please enter a valid integer.")
 
 # Function to control the steering motor
-def steer(steer_pos_set):
-    steer_pos_real = read_steer_position()
-    error = steer_pos_set - steer_pos_real
-    control_value = KP_STEER * error
-        
-    #safety mechanism
-    if steer_pos_real < STEER_LEFT_LIMIT: #Desactivate the motor in case of reaching min value
-        GPIO.output(STEER_EN_PIN, GPIO.HIGH) 
-        print("steer min value reached, motor blocked")
-    elif steer_pos_real > STEER_RIGHT_LIMIT: #Desactivate the motor in case of reaching max value
-        GPIO.output(STEER_EN_PIN, GPIO.HIGH)
-        print("steer max value reached, motor blocked")
-    else:
+def steer(steer_pos_set, enable):
+    if enable == True:
+        #Enable the motor
         GPIO.output(STEER_EN_PIN, GPIO.LOW)
+        #read real position
+        steer_pos_real = read_steer_position() 
+        #calculate error
+        error = steer_pos_set - steer_pos_real
+        #calculate control value
+        control_value = KP_STEER * error
 
-    #Define direction of spin and send PWM pulses
-    if control_value > STEER_THRESHOLD:
+        #safety mechanism
+        if steer_pos_real < STEER_LEFT_LIMIT: #Desactivate the motor in case of reaching min value
+            GPIO.output(STEER_EN_PIN, GPIO.HIGH) 
+            print("steer min value reached, motor blocked")
+        elif steer_pos_real > STEER_RIGHT_LIMIT: #Desactivate the motor in case of reaching max value
+            GPIO.output(STEER_EN_PIN, GPIO.HIGH)
+            print("steer max value reached, motor blocked")
+        else:
+            GPIO.output(STEER_EN_PIN, GPIO.LOW)
+
+        #Define direction of spin and send PWM pulses
+        if control_value > STEER_THRESHOLD:
+            
+            GPIO.output(STEER_DIR_PIN, GPIO.HIGH)
+            #send pulse
+            pulse.ChangeDutyCycle(50)
+
+        elif control_value < -STEER_THRESHOLD:
         
-        GPIO.output(STEER_DIR_PIN, GPIO.HIGH)
-        #send pulse
-        pulse.ChangeDutyCycle(50)
+            GPIO.output(STEER_DIR_PIN, GPIO.LOW)
+            #send pulse
+            pulse.ChangeDutyCycle(50)
 
-    elif control_value < -STEER_THRESHOLD:
-       
-        GPIO.output(STEER_DIR_PIN, GPIO.LOW)
-        #send pulse
-        pulse.ChangeDutyCycle(50)
-
-    else:
-        GPIO.output(STEER_EN_PIN, GPIO.HIGH)
+        else:
+            pulse.ChangeDutyCycle(0)
     
-    #Check real value
-    steer_pos_real = read_steer_position()
-    error = steer_pos_set - steer_pos_real
-
-# Function to deactivate the braking motor
-def brake_enable(argument):
-    if argument == False: #if the argument is false, the brake is deactivated
-        GPIO.output(RETRACT_EN_PIN, GPIO.LOW)
-        GPIO.output(EXTEND_EN_PIN, GPIO.LOW)
-        print("brake deactivated")
-
     else:
-        GPIO.output(RETRACT_EN_PIN, GPIO.HIGH)
-        GPIO.output(EXTEND_EN_PIN, GPIO.HIGH)
-        print("brake activated")
-
-# Function to deactivate the braking motor
-def steer_enable(argument):
-    if argument == False: #if the argument is false, the brake is deactivated
-        GPIO.output(STEER_EN_PIN, GPIO.LOW)
-        print("brake deactivated")
-
-    else:
+        #disable the motor
+        pulse.ChangeDutyCycle(0)
         GPIO.output(STEER_EN_PIN, GPIO.HIGH)
-        print("brake activated")
 
 #Function to process incoming can messages and take decisions
+#initialize last orders
+last_brake = NO_BRAKE
+last_steer = NEUTRAL_POSITION
+steer_enable = 1 #steer is enabled for initialization
 def processor(can_msg):
+    global last_brake
+    global last_steer
+    global steer_enable
     if can_msg is not None:
         #extract data from the can message
         order_id = can_msg[1]
         data = can_msg[2]
-        #memorize last orders
-        last_brake = NO_BRAKE
-        last_steer = NEUTRAL_POSITION
         
         #Brake
         if order_id == "brake_set" and data == 0:#can message with no brake
             last_brake = NO_BRAKE
 
-        elif order_id == "brake_set" and data == 1:#can message with full brake
+        if order_id == "brake_set" and data == 1:#can message with full brake
             last_brake = FULL_BRAKE
 
         
@@ -367,11 +356,17 @@ def processor(can_msg):
         if order_id == "steer_pos_set":
             last_steer = data
 
+        if order_id == "steer_enable":
+            steer_enable = data
+
         actual_steer = read_steer_position()
         if actual_steer != last_steer:
-            steer(last_steer)
+            if steer_enable == 0:
+                steer(last_steer, False)
+            else:
+                steer(last_steer, True)
 
-# Function to initialise the actuator
+# Function to initialise the actuators
 def init(message_listener):
     print("waiting for starting order...\n")
     start = False
@@ -396,7 +391,7 @@ def init(message_listener):
     print("steering initialization...\n")
     steer_pos_real = read_steer_position()
     while steer_pos_real != NEUTRAL_POSITION:
-       steer(NEUTRAL_POSITION)
+       steer(NEUTRAL_POSITION, True)
        brake(NO_BRAKE) #We still update the brake during this phase.
        steer_pos_real = read_steer_position()
 
@@ -413,9 +408,11 @@ def init(message_listener):
 
 
 def main():
-    global button_state
     try:
         with can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False) as bus:
+            
+            
+            
             # Start CAN bus
             message_listener = CanReceive()
             can.Notifier(bus, [message_listener])
