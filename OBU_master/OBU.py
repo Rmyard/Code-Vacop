@@ -55,6 +55,7 @@ CurrentLimit.start(0)
 bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False)
 
 
+
 ############################### FUNCTIONS ###########################################
 
 
@@ -100,9 +101,7 @@ def load_can_list(filename):
 device_id_map, order_id_map, device_id_reverse_map, order_id_reverse_map = load_can_list('CAN_List.txt')
 
 # Function to send message on the CAN bus
-last_sent_message = None
 def can_send(device_id, order_id, data=None, ui=None):
-    global last_sent_message
     
     # Convert human-readable IDs to their corresponding hex values
     device_value = device_id_map.get(device_id)
@@ -110,8 +109,6 @@ def can_send(device_id, order_id, data=None, ui=None):
 
     if device_value is None or order_value is None:
         raise ValueError("Invalid device_id or order_id")
-    
-    actual_message = 
 
     # Create a CAN message with device_value followed by order_value
     arbitration_id = int(device_value + order_value, 16)
@@ -238,7 +235,9 @@ def processor(can_msg, user_msg, ui=None):
         #prop_override -> reset brake & propulsion=0
         if prop_override == 1:    
             #brake
-            can_send("BRAKE", "brake_set", 0, ui)
+            if ui.last_braking_mode is None or ui.last_braking_mode != 0:
+                can_send("BRAKE", "brake_set", 0, ui)
+                ui.last_braking_mode = 0
             #propulsion
             propulsion(0)
         else:
