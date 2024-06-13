@@ -1,5 +1,5 @@
 #OBU.py
-#12/06/24
+#13/06/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
@@ -15,8 +15,8 @@ import RPi.GPIO as GPIO
 import can
 import re
 import time
-import os
 import tkinter as tk
+import Adafruit_MCP3008
 
 #Set the DEVICE as On Board Unit (OBU). It will be used to sort incoming can messages destined to this DEVICE
 DEVICE = "OBU"
@@ -24,35 +24,41 @@ DEVICE = "OBU"
 # Set GPIO mode to BCM
 GPIO.setmode(GPIO.BCM)
 
-# Set GPIO pins for the propulsion controller
-DIR_POSITIVE = 27 #make the car go forward
-DIR_NEGATIVE = 23 #make the car go backward
-SET_TORQUE_PIN = 17 #set the current applied to the motors
-CURRENT_LIMIT_PIN = 22 #set the current limit of the motors
-STO_PIN = 16 #Set Torque Off
-
 # Set PWM frequency (Hz)
-PWM_FREQ = 5000
+PWM_FREQ_PROP = 5000
 
-# Pilot the motor
-GPIO.setup(DIR_POSITIVE, GPIO.OUT)
-GPIO.setup(DIR_NEGATIVE, GPIO.OUT)
-GPIO.setup(SET_TORQUE_PIN, GPIO.OUT)
-GPIO.setup(CURRENT_LIMIT_PIN, GPIO.OUT)
-GPIO.setup(STO_PIN, GPIO.OUT)
+# Set GPIO pins for the propulsion controller
+DIR_1_PIN = 23 #chose the direction of the motor1 (HIGH = CCW) (LOW = CW)
+DIR_2_PIN = 17 #chose the direction of the motor2 (HIGH = CCW) (LOW = CW)
+SET_TORQUE_1_PIN = 24 #set the current applied to motor 1
+SET_TORQUE_2_PIN = 22 #set the current applied to motor 2
+STO1_PIN = 16 #Set Torque Off motor 1
+STO2_PIN = 26 #Set Torque Off motor 2
 
-# Set the initial direction
-GPIO.output(DIR_POSITIVE, GPIO.HIGH) #for now we can only go forward
-GPIO.output(DIR_NEGATIVE, GPIO.LOW)
-GPIO.output(STO_PIN, GPIO.HIGH) #for now the motor is always enabled
+GPIO.setup(DIR_1_PIN, GPIO.OUT)
+GPIO.setup(DIR_2_PIN, GPIO.OUT)
+GPIO.setup(SET_TORQUE_1_PIN, GPIO.OUT)
+GPIO.setup(SET_TORQUE_2_PIN, GPIO.OUT)
+GPIO.setup(STO1_PIN, GPIO.OUT)
+GPIO.setup(STO2_PIN, GPIO.OUT)
 
-# Initialize PWM for SET_TORQUE_PIN
-SetTorque = GPIO.PWM(SET_TORQUE_PIN, PWM_FREQ)
-CurrentLimit = GPIO.PWM(CURRENT_LIMIT_PIN, PWM_FREQ)
+GPIO.output(DIR_1_PIN, GPIO.HIGH) #for now we can only go forward
+GPIO.output(DIR_2_PIN, GPIO.LOW) #for now we can only go forward
 
-# Start PWM with 0% duty cycle
-SetTorque.start(0)
-CurrentLimit.start(0)
+# Initialize PWM pins
+SetTorque1 = GPIO.PWM(SET_TORQUE_1_PIN, PWM_FREQ_PROP)
+SetTorque2 = GPIO.PWM(SET_TORQUE_2_PIN, PWM_FREQ_PROP)
+
+# Start PWM instances
+SetTorque1.start(0)
+SetTorque2.start(0)
+
+# MCP3008 configuration
+CLK = 21
+MISO = 19
+MOSI = 20
+CS = 7
+mcp = Adafruit_MCP3008.MCP3008(clk=CLK, cs=CS, miso=MISO, mosi=MOSI)
 
 #Setup the can bus
 bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False)
@@ -186,7 +192,16 @@ def propulsion(prop_set):
     # Map the value
     prop_set = int((prop_set * 100) / 1023)
     # Set the duty cycle of the motors
-    SetTorque.ChangeDutyCycle(prop_set)
+    SetTorque1.ChangeDutyCycle(prop_set)
+    SetTorque2.ChangeDutyCycle(prop_set)
+
+def propulsion_enable(enable):
+    if enable is True :
+        GPIO.output(STO1_PIN, GPIO.HIGH)
+        GPIO.output(STO2_PIN, GPIO.HIGH)
+    else:
+        GPIO.output(STO1_PIN, GPIO.LOW)
+        GPIO.output(STO2_PIN, GPIO.LOW)
 
 # Function to process can messages and user inputs
 # Initialize variables
@@ -429,6 +444,8 @@ def init(app, root, message_listener):
                 print("One of the devices encountered a problem")
 
     # We enable movement of the actuators
+    propulsion(0)
+    propulsion_enable(True)#activate propulsion
     can_send("BRAKE","brake_enable",None,app)
     can_send("STEER","steer_enable",None,app)
     print("Ready to use")
@@ -472,6 +489,9 @@ def main():
                     # Check if the on/off button has been pressed to stop the system
                     if user_msg[0] == 0:
                         print("System stopped.\n\n\n")
+                        can_send("BRAKE", "stop", None, app)
+                        propulsion(0) #set propulsion to 0 
+                        propulsion_enable(False) #deactivate propulsion
                         running = False
                         break
                     
@@ -480,7 +500,6 @@ def main():
 
     except KeyboardInterrupt:
         print("Exiting...")
-        can_send("BRAKE", "stop")
 
     finally:
         bus.shutdown()
