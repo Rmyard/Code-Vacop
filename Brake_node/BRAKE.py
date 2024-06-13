@@ -1,5 +1,5 @@
 #BRAKE.py
-#12/06/24
+#13/06/24
 #Rémi Myard
 
 #This code is hosted by the BRAKE DEVICE, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
@@ -14,7 +14,6 @@
 # Import libraries
 import RPi.GPIO as GPIO
 import can
-import os
 import time
 import Adafruit_MCP3008
 import re
@@ -232,57 +231,59 @@ def brake_override(BRAKE_PIN):
         button_state = 0
         can_send("OBU", "prop_override", button_state)
     
-
-    
-
 # Function to control the braking motor
-def brake(brake_pos_set):
+def brake(brake_pos_set, enable):
     try:
-        #Read actuator position
-        brake_pos_real= read_brake_position()
-        #print("brake_pos_real = ",brake_pos_real)
-        #print("brake_pos_set = ",brake_pos_set)
+        if enable == True:
+            #Enable the motor
+            GPIO.output(RETRACT_EN_PIN, GPIO.HIGH)  
+            #Read actuator position
+            brake_pos_real= read_brake_position()
 
-        #Check the real value, deactivate movement if necessary. This is to ensure that the actuator stays in the safe limits.
-        if brake_pos_real < BRAKE_MIN_EXTEND:
-            GPIO.output(RETRACT_EN_PIN, GPIO.LOW)
-            print("min extend reached")
+            #Check the real value, deactivate movement if necessary. This is to ensure that the actuator stays in the safe limits.
+            if brake_pos_real < BRAKE_MIN_EXTEND:
+                GPIO.output(RETRACT_EN_PIN, GPIO.LOW)
+                print("min extend reached")
+            else:
+                GPIO.output(RETRACT_EN_PIN, GPIO.HIGH)
+
+            if brake_pos_real > BRAKE_MAX_EXTEND:
+                GPIO.output(EXTEND_EN_PIN, GPIO.LOW)
+                print("max extend reached")
+            else:
+                GPIO.output(EXTEND_EN_PIN, GPIO.HIGH)
+            
+            # Calculate error (setpoint-real_value)
+            error = brake_pos_set - brake_pos_real
+
+            # Calculate control value
+            control_value = KP_BRAKE * error
+            
+            # Map the control value from -100 to 100 for pwm application
+            control_value = int((control_value/1023) * 100)
+            if control_value < -100: #limiter
+                control_value = -100
+            if control_value > 100:
+                control_value = 100
+            if -BRAKE_THRESHOLD<control_value<BRAKE_THRESHOLD:#deadzone (avoid activating the actuator with the noise)
+                control_value = 0
+
+            # Map control value to duty cycle (this essentially controls the motor speed and direction)
+            if control_value > 0: # Extension
+                extend_pwm.ChangeDutyCycle(control_value)
+                retract_pwm.ChangeDutyCycle(0)
+            elif control_value < 0: # Retraction
+                extend_pwm.ChangeDutyCycle(0)
+                retract_pwm.ChangeDutyCycle(-control_value)
+            else: # Stop
+                extend_pwm.ChangeDutyCycle(0)
+                retract_pwm.ChangeDutyCycle(0)
         else:
-            GPIO.output(RETRACT_EN_PIN, GPIO.HIGH)
-
-        if brake_pos_real > BRAKE_MAX_EXTEND:
+            #deactivate movement of the motor
+            extend_pwm.ChangeDutyCycle(0)
+            retract_pwm.ChangeDutyCycle(0)
             GPIO.output(EXTEND_EN_PIN, GPIO.LOW)
-            print("max extend reached")
-        else:
-            GPIO.output(EXTEND_EN_PIN, GPIO.HIGH)
-        
-        # Calculate error (setpoint-real_value)
-        error = brake_pos_set - brake_pos_real
-
-        # Calculate control value
-        control_value = KP_BRAKE * error
-        #print("ctr_val = ",control_value)
-        print("control value = ", control_value)
-        
-        # Map the control value from -100 to 100 for pwm application
-        control_value = int((control_value/1023) * 100)
-        if control_value < -100: #limiter
-            control_value = -100
-        if control_value > 100:
-            control_value = 100
-        if -BRAKE_THRESHOLD<control_value<BRAKE_THRESHOLD:#deadzone (avoid activating the actuator with the noise)
-            control_value = 0
-
-        # Map control value to duty cycle (this essentially controls the motor speed and direction)
-        if control_value > 0: # Extension
-            extend_pwm.ChangeDutyCycle(control_value)
-            retract_pwm.ChangeDutyCycle(0)
-        elif control_value < 0: # Retraction
-            extend_pwm.ChangeDutyCycle(0)
-            retract_pwm.ChangeDutyCycle(-control_value)
-        else: # Stop
-            extend_pwm.ChangeDutyCycle(0)
-            retract_pwm.ChangeDutyCycle(0)
+            GPIO.output(RETRACT_EN_PIN, GPIO.LOW)
 
     except ValueError:
         print("Invalid input. Please enter a valid integer.")
@@ -306,21 +307,17 @@ def steer(steer_pos_set, enable):
         elif steer_pos_real > STEER_RIGHT_LIMIT: #Desactivate the motor in case of reaching max value
             GPIO.output(STEER_EN_PIN, GPIO.HIGH)
             print("steer max value reached, motor blocked")
-        else:
+        else: #Activate the motor
             GPIO.output(STEER_EN_PIN, GPIO.LOW)
 
         #Define direction of spin and send PWM pulses
-        if control_value > STEER_THRESHOLD:
-            
-            GPIO.output(STEER_DIR_PIN, GPIO.HIGH)
-            #send pulse
-            pulse.ChangeDutyCycle(50)
+        if control_value > STEER_THRESHOLD: 
+            GPIO.output(STEER_DIR_PIN, GPIO.HIGH) #change direction
+            pulse.ChangeDutyCycle(50) #send pulse
 
         elif control_value < -STEER_THRESHOLD:
-        
-            GPIO.output(STEER_DIR_PIN, GPIO.LOW)
-            #send pulse
-            pulse.ChangeDutyCycle(50)
+            GPIO.output(STEER_DIR_PIN, GPIO.LOW) #change direction
+            pulse.ChangeDutyCycle(50) #send pulse
 
         else:
             pulse.ChangeDutyCycle(0)
@@ -335,12 +332,16 @@ def steer(steer_pos_set, enable):
 last_brake = NO_BRAKE
 last_steer = NEUTRAL_POSITION
 steer_enable = 1 #steer is enabled for initialization
+running = False
 def processor(can_msg):
     global last_brake
     global last_steer
     global steer_enable
+    global running
+    
+    #extract data from the can message
     if can_msg is not None:
-        #extract data from the can message
+        
         order_id = can_msg[1]
         data = can_msg[2]
         
@@ -358,38 +359,44 @@ def processor(can_msg):
         if order_id == "steer_enable":
             steer_enable = data
 
-        
+        if order_id == "stop":
+            running = False
 
-    #using the memory last_brake to pilot the braking actuator
+        if order_id == "start":
+            running = True
+
+    # Using the memory last_brake to pilot the braking actuator
     actual_brake = read_brake_position()
     if  actual_brake != last_brake:
-        brake(last_brake)
+        brake(last_brake, True)
 
+    # Using the memory last_steer to control the steering actuator
     actual_steer = read_steer_position()
     if actual_steer != last_steer:
-        if steer_enable == 0:
-            steer(last_steer, False)
+        if steer_enable == 0: 
+            steer(last_steer, False) #motor disabled
         else:
-            steer(last_steer, True)
+            steer(last_steer, True) #motor enabled
+        
 
 # Function to initialise the actuators
 def init(message_listener):
+    global running
     print("waiting for starting order...\n")
-    start = False
     #We wait for the OBU to send the start message
-    while start is False:
+    while running is False:
         can_msg = message_listener.can_input()
         if can_msg is not None:
             # Extract data from the can message
             order_id = can_msg[1] #order_id is the order we received
             data = can_msg[2] #data is the data attached to the order
             if order_id == "start":
-                start = True
+                running = True
     #Once the start message is received we start to initialise the actuators
     print("braking initialization...\n")
     brake_pos_real = read_brake_position()
     while brake_pos_real != NO_BRAKE:
-        brake(NO_BRAKE)
+        brake(NO_BRAKE, True)
         brake_pos_real = read_brake_position()
         
     
@@ -398,7 +405,7 @@ def init(message_listener):
     steer_pos_real = read_steer_position()
     while steer_pos_real != NEUTRAL_POSITION:
        steer(NEUTRAL_POSITION, True)
-       brake(NO_BRAKE) #We still update the brake during this phase.
+       brake(NO_BRAKE, True) #We still update the brake during this phase.
        steer_pos_real = read_steer_position()
 
     can_send("OBU","brake_rdy")
@@ -406,6 +413,7 @@ def init(message_listener):
     can_send("OBU","brake_rdy")
 
     print("actuators initialized")
+    
 
 
 
@@ -414,11 +422,9 @@ def init(message_listener):
 
 
 def main():
+    global running
     try:
         with can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False) as bus:
-            
-            
-            
             # Start CAN bus
             message_listener = CanReceive()
             can.Notifier(bus, [message_listener])
@@ -431,16 +437,25 @@ def main():
             #Start button event detection
             GPIO.add_event_detect(BRAKE_PIN, GPIO.BOTH, callback=brake_override, bouncetime=20)
 
-            #Initialise de position of the actuator
-            init(message_listener)
-            
             while True:
-                # Receive CAN message
-                can_msg = message_listener.can_input()
-                # Process the can message 
-                processor(can_msg)
-                # Read the value from the accelerator pedal and send the acceleration value on the can bus
-                read_accelerator()
+                #Initialise de position of the actuator
+                init(message_listener)
+                print("System running.\n\n\n")
+                running = True
+                while running:
+                    # Receive CAN message
+                    can_msg = message_listener.can_input()
+                    
+                    # Process the can message 
+                    processor(can_msg)
+                    # Read the value from the accelerator pedal and send the acceleration value on the can bus
+                    read_accelerator()
+                
+                # When the actuator has been stopped by the OBU
+                print("System stopped.\n\n\n")
+                brake(NO_BRAKE,False) #deactivate braking
+                steer(last_steer,False) #deactivate steering
+                    
 
     
     except KeyboardInterrupt:
