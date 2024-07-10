@@ -1,5 +1,5 @@
 #OBU.py
-#13/06/24
+#10/07/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
