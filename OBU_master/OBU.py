@@ -1,5 +1,5 @@
 #OBU.py
-#10/07/24
+#18/07/24
 #Rémi Myard
 
 #This is the code of the On Board Unit of the VACOP
@@ -58,7 +58,7 @@ CLK = 21
 MISO = 19
 MOSI = 20
 CS = 7
-mcp = Adafruit_MCP3008.MCP3008(clk=CLK, cs=CS, miso=MISO, mosi=MOSI)
+#mcp = Adafruit_MCP3008.MCP3008(clk=CLK, cs=CS, miso=MISO, mosi=MOSI)
 
 #Setup the can bus
 bus = can.interface.Bus(channel='can0', bustype='socketcan', receive_own_messages=False)
