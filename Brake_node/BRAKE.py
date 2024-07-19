@@ -1,5 +1,5 @@
 #BRAKE.py
-#10/07/24
+#18/07/24
 #Rémi Myard
 
 #This code is hosted by the BRAKE DEVICE, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
@@ -513,3 +513,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+     
