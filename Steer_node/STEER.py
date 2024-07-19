@@ -1,5 +1,5 @@
-#BRAKE.py
-#13/06/24
+#STEER.py
+#18/07/24
 #Rémi Myard
 
 #This code is hosted by the BRAKE DEVICE, it is controling the braking actuator and is receiving data from the accelerator pedal and manual braking button. 
@@ -208,15 +208,15 @@ def log_sensor(brake_pos_set, steer_pos_set, start_time):
 # Function to control the steering motor
 def steer(steer_pos_set, enable):
     if enable == True:
+        print("enabled")
         #read real position
         steer_pos_real = read_steer_position()
-        print("steer_pos_real = ",steer_pos_real)
-        print("steer_pos_set = ",steer_pos_set)
+
         #calculate error
         error = steer_pos_set - steer_pos_real
+
         #calculate control value
         control_value = KP_STEER * error
-        print("ctrl_val = ",control_value)
 
         #safety mechanism
         if steer_pos_real < STEER_LEFT_LIMIT: #Desactivate the motor in case of reaching min value
@@ -232,13 +232,10 @@ def steer(steer_pos_set, enable):
         if control_value > STEER_THRESHOLD: 
             GPIO.output(STEER_DIR_PIN, GPIO.HIGH) #change direction
             pulse.ChangeDutyCycle(50) #send pulse
-            print("pulse_left")
 
         elif control_value < -STEER_THRESHOLD:
             GPIO.output(STEER_DIR_PIN, GPIO.LOW) #change direction
             pulse.ChangeDutyCycle(50) #send pulse
-            print("pulse_left")
-
         else:
             pulse.ChangeDutyCycle(0)
     
@@ -246,6 +243,7 @@ def steer(steer_pos_set, enable):
         #disable the motor
         pulse.ChangeDutyCycle(0)
         GPIO.output(STEER_EN_PIN, GPIO.HIGH)
+        print("disabled")
 
 #Function to log the sensor values
 def log_sensor(steer_pos_set, start_time):
@@ -280,6 +278,7 @@ def processor(can_msg):
 
         if order_id == "steer_enable":
             steer_enable = data
+            print("enable data = ", steer_enable)
 
         if order_id == "stop":
             running = False
@@ -288,7 +287,7 @@ def processor(can_msg):
             running = True
 
     
-# Using the memory last_steer to control the steering actuator
+    # Using the memory last_steer to control the steering actuator
     actual_steer = read_steer_position()
     if actual_steer != last_steer:
         if steer_enable == 0: 
@@ -296,7 +295,9 @@ def processor(can_msg):
         else:
             steer(last_steer, True) #motor enabled
     
-    log_sensor(last_steer, start_time)
+    print(1)
+    
+    #log_sensor(last_steer, start_time)
         
 
 # Function to initialise the actuators
@@ -358,6 +359,7 @@ def main():
                 while running:
                     # Receive CAN message
                     can_msg = message_listener.can_input()
+                    print(can_msg)
                     
                     # Process the can message 
                     processor(can_msg)
