@@ -1,3 +1,4 @@
+#use library RpiMotorLib
 import RPi.GPIO as GPIO
 from RpiMotorLib import RpiMotorLib
 import time
