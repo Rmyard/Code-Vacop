@@ -1,4 +1,6 @@
 #CAN0.py
+#simulate a CAN node
+#used to develop the can_send, CanReceive and load_can_list functions
 
 import can
 import re
