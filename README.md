@@ -22,4 +22,4 @@ Other folders :
 -Test_code
   motor_test.py #control the torque aplied to the brushless motors (from 0 to 100%)
   brake_openloop_control.py #control the speed of the electric actuator (from -100% to +100%)
-  post_processor.py #plot graphs of the 
+  post_processor.py #plot graphs of the sensor_log.csv file
